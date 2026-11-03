@@ -1,6 +1,6 @@
 // Service Worker „Mitarbeit“
 // WICHTIG: Bei jedem Update die VERSION erhöhen – nur dann erkennt das iPad die neue Version.
-const VERSION = '1.0.0';
+const VERSION = '2.0.0';
 const CACHE = 'mitarbeit-v' + VERSION;
 
 const ASSETS = [
@@ -32,6 +32,7 @@ const ASSETS = [
   'js/views/entries.js',
   'js/views/group.js',
   'js/views/periods.js',
+  'js/views/pinpad.js',
   'js/views/present.js',
   'js/views/rate.js',
   'js/views/seatplan.js',

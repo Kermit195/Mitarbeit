@@ -18,7 +18,6 @@ export function defaultSettings() {
     schuljahr: '2026/27',
     lockMinutes: 5,
     backupReminderDays: 7,
-    rounding: 'math', // 'math': 2,5 → 3 · 'favor': 2,5 → 2
     bell: [
       { nr: 1, start: '08:00', end: '08:45' },
       { nr: 2, start: '08:50', end: '09:35' },
@@ -35,22 +34,46 @@ export function defaultSettings() {
   };
 }
 
+// ---------- Notenschlüssel ----------
+
+// Sek I: Note n ab „min“ Punkten pro anwesende Stunde; darunter Note 6
+const key1 = (a, b, c, d, e) => [1, 2, 3, 4, 5].map((grade, i) => ({ grade, min: [a, b, c, d, e][i] }));
+
+// Sek II aus dem Sek-I-Schlüssel ableiten: jeder Notenbereich in drei gleich breite Stufen;
+// Note 1 erhält dieselbe Breite wie Note 2; Note 6 = 0 Punkte.
+export function deriveSek2(sek1) {
+  const min = g => Number(sek1.find(k => k.grade === g).min);
+  const out = [];
+  for (let g = 1; g <= 5; g++) {
+    const lo = min(g);
+    const hi = g === 1 ? lo + (min(1) - min(2)) : min(g - 1);
+    const w = (hi - lo) / 3;
+    const base = 16 - 3 * g; // Note 1 → 13, Note 2 → 10 … Note 5 → 1
+    for (let i = 2; i >= 0; i--) out.push({ pts: base + i, min: Math.round((lo + i * w) * 100) / 100 });
+  }
+  return out; // absteigend: 15 … 1
+}
+
+function keys(sek1) { return { sek1, sek2: deriveSek2(sek1) }; }
+
+// ---------- Fächer ----------
+
 export function sportConfig() {
   return {
-    blockStart: '2026-08-24',
+    periodWeeks: 4,
     thresholds: { haeufung: 3, luecke: 3, excuseDays: 7 },
+    key: keys(key1(1.0, 0.6, 0.3, 0, -0.3)),
     sections: [
-      { id: 'neutral', label: 'Neutral – ohne Auswirkung auf die Note' },
-      { id: 'schwer', label: 'Schwer' },
-      { id: 'mittel', label: 'Mittel' },
-      { id: 'leicht', label: 'Leicht' },
+      { id: 'neutral', label: 'Wertungsfrei' },
+      { id: 'mitarbeit', label: 'Mitarbeit' },
+      { id: 'organisation', label: 'Organisation und Regeln' },
     ],
     cats: [
       { id: 'abwesend', label: 'Nicht anwesend', section: 'neutral', neutral: true, hint: 'setzt automatisch „Entschuldigung offen“' },
-      { id: 'befreit', label: 'Sportbefreiung', section: 'neutral', neutral: true, hint: 'gilt bis zum gewählten Datum in jeder Stunde' },
+      { id: 'befreit', label: 'Sportbefreiung', section: 'neutral', neutral: true, hint: 'gilt bis zum gewählten Datum; befreite Tage zählen nicht als Stunde' },
       { id: 'eingeschraenkt', label: 'Eingeschränkte Teilnahme', section: 'neutral', neutral: true, subs: ['teilweise befreit', 'in der Stunde verletzt'] },
       {
-        id: 'respekt', label: 'Respekt und Fairness', section: 'schwer', w: 0.5, plus: true, minus: true,
+        id: 'respekt', label: 'Respekt und Fairness', section: 'mitarbeit', plus: 2, minus: -2,
         fb: {
           plus: 'Du gehst respektvoll und fair mit deinen Mitschüler:innen um – auch im Wettkampf.',
           minus: 'Achte darauf, fair zu bleiben und respektvoll mit anderen umzugehen, auch wenn es mal nicht so läuft.',
@@ -58,27 +81,7 @@ export function sportConfig() {
         },
       },
       {
-        id: 'material', label: 'Fehlendes Material', section: 'schwer', w: 0.5, minus: true,
-        subs: ['Sportsachen vergessen', 'Fingernägel zu lang', 'Schmuck nicht abgelegt'],
-        fb: {
-          minus: 'Komm vollständig vorbereitet zum Sportunterricht ({subs}).',
-          tip: 'Pack deine Sporttasche schon am Vorabend und denk an kurze Fingernägel und abgelegten Schmuck.',
-        },
-      },
-      {
-        id: 'entschuldigung', label: 'Entschuldigung nicht nachgereicht', section: 'schwer', w: 0.5, minus: true,
-        fb: {
-          minus: 'Reiche Entschuldigungen für Fehlstunden bitte rechtzeitig nach.',
-          tip: 'Gib eine Entschuldigung immer gleich in der nächsten Sportstunde ab.',
-        },
-      },
-      {
-        id: 'beteiligung', label: 'Beteiligung', section: 'mittel', w: 0.25, plus: true,
-        hint: 'aktiv, motiviert, konzentriert, auch in Gesprächsphasen',
-        fb: { plus: 'Du beteiligst dich aktiv, motiviert und konzentriert am Unterricht.' },
-      },
-      {
-        id: 'einsatz', label: 'Einsatz in Übungsphasen', section: 'mittel', w: 0.25, plus: true, minus: true,
+        id: 'einsatz', label: 'Einsatz in Übungsphasen', section: 'mitarbeit', plus: 2, minus: -2,
         fb: {
           plus: 'In den Übungsphasen zeigst du viel Einsatz.',
           minus: 'In den Übungsphasen kannst du noch mehr Einsatz zeigen und die Übungszeit besser nutzen.',
@@ -86,29 +89,38 @@ export function sportConfig() {
         },
       },
       {
-        id: 'hilfe', label: 'Hilfe und Unterstützung', section: 'mittel', w: 0.25, plus: true,
-        hint: 'Hilfestellung, anderen helfen, Verantwortung übernehmen',
-        fb: { plus: 'Du hilfst anderen, gibst Hilfestellung und übernimmst Verantwortung.' },
+        id: 'passiv', label: 'Passive Mitarbeit', section: 'mitarbeit',
+        hint: 'aufmerksam bei Erklärungen und in Gesprächsphasen',
+        levels: [
+          { id: 'p2', label: '+2', pts: 2 },
+          { id: 'p1', label: '+1', pts: 1 },
+          { id: 'n0', label: '0', pts: 0 },
+          { id: 'm1', label: '−1', pts: -1 },
+          { id: 'm2', label: '−2', pts: -2 },
+        ],
+        fb: {
+          plus: 'Bei Erklärungen und in Gesprächsphasen bist du aufmerksam dabei.',
+          minus: 'Sei bei Erklärungen und in Gesprächsphasen aufmerksamer.',
+          tip: 'Schau bei Erklärungen bewusst nach vorn und überlege, was als Nächstes zu tun ist.',
+        },
       },
       {
-        id: 'fachlich', label: 'Fachliche Beiträge und Reflexion', section: 'mittel', w: 0.25, plus: true,
+        id: 'fachlich', label: 'Fachliche Beiträge und Reflexion', section: 'mitarbeit', plus: 1,
         hint: 'Regelkenntnis, Bewegungen beschreiben und beurteilen',
         fb: { plus: 'Du bringst dein Wissen ein, kennst die Regeln und kannst Bewegungen gut beschreiben und beurteilen.' },
       },
       {
-        id: 'stoerung', label: 'Störung', section: 'mittel', w: 0.25, minus: true,
-        subs: ['Nebengespräche', 'Ablenkung', 'unsachgemäßer Umgang mit Sportmaterial'],
-        fb: {
-          minus: 'Versuche, Störungen zu vermeiden ({subs}), damit alle gut lernen können.',
-          tip: 'Hör bei Erklärungen bewusst zu und such dir einen Platz, an dem du dich gut konzentrieren kannst.',
-        },
+        id: 'beteiligung', label: 'Beteiligung', section: 'mitarbeit', plus: 1,
+        hint: 'aktiv, motiviert, konzentriert',
+        fb: { plus: 'Du beteiligst dich aktiv, motiviert und konzentriert am Unterricht.' },
       },
       {
-        id: 'unpuenktlich', label: 'Unpünktlich', section: 'leicht', w: 0.1, minus: true,
-        fb: { minus: 'Komm pünktlich und umgezogen in die Halle.', tip: 'Plane für das Umziehen ein paar Minuten mehr ein.' },
+        id: 'hilfe', label: 'Hilfe und Unterstützung', section: 'mitarbeit', plus: 1,
+        hint: 'Hilfestellung, anderen helfen, Verantwortung übernehmen',
+        fb: { plus: 'Du hilfst anderen, gibst Hilfestellung und übernimmst Verantwortung.' },
       },
       {
-        id: 'zusammenkommen', label: 'Zügiges Zusammenkommen', section: 'leicht', w: 0.1, plus: true, minus: true,
+        id: 'zusammenkommen', label: 'Zügiges Zusammenkommen', section: 'organisation', plus: 1, minus: -1,
         fb: {
           plus: 'Wenn wir uns sammeln, bist du schnell da.',
           minus: 'Wenn wir uns sammeln, kannst du noch zügiger dazukommen.',
@@ -116,11 +128,39 @@ export function sportConfig() {
         },
       },
       {
-        id: 'aufbau', label: 'Auf- und Abbau', section: 'leicht', w: 0.1, plus: true, minus: true,
+        id: 'aufbau', label: 'Auf- und Abbau', section: 'organisation', plus: 1, minus: -1,
         fb: {
           plus: 'Beim Auf- und Abbau packst du mit an.',
           minus: 'Beim Auf- und Abbau kannst du dich noch mehr einbringen.',
           tip: 'Übernimm beim nächsten Aufbau freiwillig eine Station.',
+        },
+      },
+      {
+        id: 'material', label: 'Fehlendes Material', section: 'organisation', minus: -5,
+        subs: ['Sportsachen vergessen', 'Fingernägel zu lang', 'Schmuck nicht abgelegt'],
+        fb: {
+          minus: 'Komm vollständig vorbereitet zum Sportunterricht ({subs}).',
+          tip: 'Pack deine Sporttasche schon am Vorabend und denk an kurze Fingernägel und abgelegten Schmuck.',
+        },
+      },
+      {
+        id: 'entschuldigung', label: 'Entschuldigung nicht nachgereicht', section: 'organisation', minus: -5,
+        hint: 'die Fehlstunde zählt dann wie eine anwesende Stunde',
+        fb: {
+          minus: 'Reiche Entschuldigungen für Fehlstunden bitte rechtzeitig nach.',
+          tip: 'Gib eine Entschuldigung immer gleich in der nächsten Sportstunde ab.',
+        },
+      },
+      {
+        id: 'unpuenktlich', label: 'Unpünktlich', section: 'organisation', minus: -1,
+        fb: { minus: 'Komm pünktlich und umgezogen in die Halle.', tip: 'Plane für das Umziehen ein paar Minuten mehr ein.' },
+      },
+      {
+        id: 'stoerung', label: 'Störung', section: 'organisation', minus: -1,
+        subs: ['Nebengespräche', 'Ablenkung', 'unsachgemäßer Umgang mit Sportmaterial'],
+        fb: {
+          minus: 'Versuche, Störungen zu vermeiden ({subs}), damit alle gut lernen können.',
+          tip: 'Hör bei Erklärungen bewusst zu und such dir einen Platz, an dem du dich gut konzentrieren kannst.',
         },
       },
     ],
@@ -140,11 +180,17 @@ export function sportConfig() {
 
 export function pbConfig() {
   return {
+    periodWeeks: 9,
     thresholds: { haeufung: 3, luecke: 3 },
-    written: { w: 0.15, arts: ['Exit-Ticket', 'Arbeitsblatt', 'Hausaufgabe', 'Sonstiges'] },
+    key: keys(key1(2.5, 1.5, 0.75, 0, -0.5)),
+    written: {
+      points: { '+': 2, o: 0, '-': -1, na: -2 },
+      arts: ['Exit-Ticket', 'Arbeitsblatt', 'Sonstiges'],
+    },
     sections: [
-      { id: 'neutral', label: 'Neutral' },
-      { id: 'bewertend', label: 'Bewertend' },
+      { id: 'neutral', label: 'Wertungsfrei' },
+      { id: 'muendlich', label: 'Mündliche Mitarbeit' },
+      { id: 'arbeit', label: 'Hausaufgaben, Material und Arbeitsverhalten' },
     ],
     areas: [
       { id: 'inhalt', label: 'Inhaltliche Qualität', self: 'Meine Beiträge sind inhaltlich gut und begründet.' },
@@ -153,19 +199,19 @@ export function pbConfig() {
     ],
     selfScale: ['trifft noch nicht zu', 'trifft teilweise zu', 'trifft überwiegend zu', 'trifft voll zu'],
     cats: [
-      { id: 'abwesend', label: 'Nicht anwesend', section: 'neutral', neutral: true },
+      { id: 'abwesend', label: 'Nicht anwesend', section: 'neutral', neutral: true, hint: 'wertungsfrei; Hausaufgaben und Schriftliches dieses Tages: „nicht anwesend“' },
       {
-        id: 'rede', label: 'Redebeitrag', section: 'bewertend', plus: true,
+        id: 'rede', label: 'Redebeitrag', section: 'muendlich',
         levels: [
-          { id: 'I', label: 'AFB I', w: 0.05 },
-          { id: 'II', label: 'AFB II', w: 0.15 },
-          { id: 'III', label: 'AFB III', w: 0.3 },
+          { id: 'I', label: 'AFB I', pts: 1 },
+          { id: 'II', label: 'AFB II', pts: 2 },
+          { id: 'III', label: 'AFB III', pts: 3 },
         ],
         hint: 'I wiedergeben · II erklären/analysieren · III beurteilen/Stellung nehmen',
         fb: { area: 'inhalt' },
       },
       {
-        id: 'respekt', label: 'Respekt und Fairness', section: 'bewertend', w: 0.3, plus: true, minus: true,
+        id: 'respekt', label: 'Respekt und Fairness', section: 'muendlich', plus: 2, minus: -2,
         fb: {
           area: 'kommunikation',
           plus: 'Du gehst respektvoll mit anderen Meinungen um und diskutierst fair.',
@@ -173,17 +219,7 @@ export function pbConfig() {
         },
       },
       {
-        id: 'stoerung', label: 'Störung', section: 'bewertend', w: 0.2, minus: true,
-        subs: ['Nebengespräche', 'Ablenkung', 'Handynutzung', 'Zwischenrufe'],
-        fb: { area: 'beteiligung', minus: 'Vermeide Störungen ({subs}), damit du und die anderen konzentriert arbeiten können.' },
-      },
-      {
-        id: 'material', label: 'Fehlendes Material', section: 'bewertend', w: 0.2, minus: true,
-        subs: ['Lehrbuch fehlt', 'Hausaufgaben vergessen', 'Hefter/Arbeitsmaterial fehlt'],
-        fb: { area: 'beteiligung', minus: 'Denk an dein Material und deine Hausaufgaben ({subs}).' },
-      },
-      {
-        id: 'kommunikation', label: 'Kommunikation und Zusammenarbeit', section: 'bewertend', w: 0.1, plus: true, minus: true,
+        id: 'kommunikation', label: 'Kommunikation und Zusammenarbeit', section: 'muendlich', plus: 1, minus: -1,
         subs: ['produktiv in Partner-/Gruppenarbeit', 'geht auf Beiträge anderer ein', 'Präsentation'],
         fb: {
           area: 'kommunikation',
@@ -192,13 +228,37 @@ export function pbConfig() {
         },
       },
       {
-        id: 'arbeitsverhalten', label: 'Arbeitsverhalten', section: 'bewertend', w: 0.1, minus: true,
-        subs: ['beginnt Aufgaben nicht zügig', 'arbeitet zu langsam', 'arbeitet nicht zielgerichtet'],
+        id: 'hausaufgaben', label: 'Hausaufgaben', section: 'arbeit', onePerDay: true,
+        hint: 'ein Eintrag pro Tag – ein neuer ersetzt den alten',
+        levels: [
+          { id: '+', label: 'vorgetragen', pts: 2 },
+          { id: 'o', label: 'vorhanden', pts: 0 },
+          { id: '-', label: 'unvollständig/fehlt', pts: -3 },
+        ],
+        fb: {
+          area: 'beteiligung',
+          plus: 'Du stellst deine Hausaufgaben vor und bringst damit den Unterricht voran.',
+          minus: 'Erledige deine Hausaufgaben vollständig und zuverlässig.',
+        },
+      },
+      {
+        id: 'material', label: 'Fehlendes Material', section: 'arbeit', minus: -1,
+        subs: ['Lehrbuch fehlt', 'Hefter/Arbeitsmaterial fehlt'],
+        fb: { area: 'beteiligung', minus: 'Denk an dein Material ({subs}).' },
+      },
+      {
+        id: 'stoerung', label: 'Störung', section: 'arbeit', minus: -1,
+        subs: ['Nebengespräche', 'Ablenkung', 'Handynutzung', 'Zwischenrufe'],
+        fb: { area: 'beteiligung', minus: 'Vermeide Störungen ({subs}), damit du und die anderen konzentriert arbeiten können.' },
+      },
+      {
+        id: 'arbeitsverhalten', label: 'Arbeitsverhalten', section: 'arbeit', minus: -1,
+        subs: ['beginnt nicht zügig', 'arbeitet zu langsam', 'arbeitet nicht zielgerichtet'],
         hint: 'Standard ist „passt“ – nur bei Abweichung eintragen',
         fb: { area: 'beteiligung', minus: 'Beginne Aufgaben zügig und arbeite zielgerichtet an ihnen.' },
       },
       {
-        id: 'unpuenktlich', label: 'Unpünktlich', section: 'bewertend', w: 0.1, minus: true,
+        id: 'unpuenktlich', label: 'Unpünktlich', section: 'arbeit', minus: -1,
         fb: { area: 'beteiligung', minus: 'Komm pünktlich zum Unterricht.' },
       },
     ],
@@ -233,7 +293,7 @@ export const FB_LABELS = {
   keineMinus: 'Zusatz bei „Das läuft gut“, wenn keine Minus-Einträge vorliegen',
   arbeitenLeer: '„Daran kannst du arbeiten“, wenn keine Minus-Einträge vorliegen',
   tipp: 'Allgemeiner Tipp',
-  redeAnspruch: 'Inhalt gut: viele Beiträge in AFB II/III',
+  redeAnspruch: 'Inhalt gut: Beiträge in AFB II/III',
   redeVertiefen: 'Inhalt arbeiten: überwiegend AFB I',
   redeViel: 'Beteiligung gut: Redebeiträge mindestens im Gruppendurchschnitt',
   redeWenig: 'Beteiligung arbeiten: deutlich weniger Redebeiträge als der Durchschnitt',
@@ -249,4 +309,4 @@ export const FB_LABELS = {
 };
 
 // Kategorien, die die App selbst benötigt (nicht löschbar)
-export const SYSTEM_CATS = ['abwesend', 'befreit', 'eingeschraenkt', 'entschuldigung', 'rede'];
+export const SYSTEM_CATS = ['abwesend', 'befreit', 'eingeschraenkt', 'entschuldigung', 'rede', 'hausaufgaben'];

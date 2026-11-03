@@ -1,17 +1,18 @@
-// PB: Sitzplan mit Drag and Drop, Raster und Schloss
+// PB: Sitzplan aus Sicht der Lehrkraft (Tafel unten, erste Reihe unten) mit Drag and Drop, Raster und Schloss
 
 import { h, uid, today } from '../util.js';
 import { save, sortedStudents, studentLabel } from '../model.js';
 import { render } from '../nav.js';
 import { btn, formDialog, confirmDialog } from '../ui.js';
 import { currentPeriod, scoreOf, dayStatus, redeStats } from '../grading.js';
-import { sel, infoBar, selectionBar, trendBadge, emptyStudents } from './common.js';
+import { sel, infoBar, selectionBar, scoreBadge, emptyStudents } from './common.js';
 import { openRateSheet, tapStudent, longStudent } from './rate.js';
 
 const GRID = 16;   // Rasterweite in px
 const TW = 144;    // Kachelbreite
 const TH = 80;     // Kachelhöhe
-const TOP = 64;    // Platz für „Tafel“
+const BOARD = 64;  // Platz für „Tafel / Lehrkraft“ am unteren Rand
+const HA_SYM = { '+': 'HA +', o: 'HA o', '-': 'HA −' };
 
 export function renderSeatplan(main, g) {
   if (!g.students.length) { main.append(emptyStudents(g)); return; }
@@ -35,22 +36,25 @@ export function renderSeatplan(main, g) {
       type: 'button',
       onClick: () => { g.seatLocked = !locked; save(); render(); },
     }, locked ? '🔒 Gesperrt' : '🔓 Verschieben aktiv')));
-  main.append(infoBar(g, p));
+  main.append(...infoBar(g, p));
   if (!locked) main.append(h('p.hint', 'Kacheln ziehen, um sie anzuordnen. Sie rasten am Raster ein; auf einen besetzten Platz gezogen, tauschen zwei Kacheln. Zum Bewerten wieder sperren.'));
 
   const students = sortedStudents(g);
   const width = Math.max(600, (main.clientWidth || window.innerWidth) - 34); // abzüglich Innenabstand und Rahmen
   if (placeMissing(plan, students, width)) save();
 
-  let maxX = width, maxY = 400;
+  let maxX = width, tilesBottom = 0;
   for (const st of students) {
     const ps = plan.pos[st.id];
     maxX = Math.max(maxX, ps.x * GRID + TW + GRID);
-    maxY = Math.max(maxY, ps.y * GRID + TH + GRID);
+    tilesBottom = Math.max(tilesBottom, ps.y * GRID + TH);
   }
+  // Entsperrt: Platz unter der ersten Reihe lassen, damit Kacheln nach unten gezogen werden können
+  const extra = locked ? GRID : 2 * (TH + GRID);
+  const maxY = tilesBottom + extra + BOARD;
   const canvas = h('div.seat-canvas' + (locked ? '.locked' : '.unlocked'),
     { style: { width: maxX + 'px', height: maxY + 'px' } },
-    h('div.board', 'Tafel'));
+    h('div.board', 'Tafel · Lehrkraft'));
 
   const t = today();
   const rs = p ? redeStats(g, p) : null;
@@ -58,13 +62,14 @@ export function renderSeatplan(main, g) {
     const ps = plan.pos[st.id];
     const ds = dayStatus(g, st.id, t);
     const sc = p ? scoreOf(g, st.id, p) : null;
+    const ha = g.entries.find(e => e.sid === st.id && e.cat === 'hausaufgaben' && e.date === t);
     const tile = h('div.seat' + (ds.inactive ? '.inactive' : '') + (sel.ids.has(st.id) ? '.selected' : ''),
       { role: 'button', tabindex: 0, style: { left: ps.x * GRID + 'px', top: ps.y * GRID + 'px', width: TW + 'px', height: TH + 'px' } },
-      h('div.sname', studentLabel(st)),
+      h('div.seat-top', h('div.sname', studentLabel(st)),
+        ds.absent ? h('span.tag.absent', 'fehlt') : ha && h('span.tag.ha', { title: 'Hausaufgaben heute' }, HA_SYM[ha.level] || 'HA')),
       h('div.seat-meta',
-        sc && trendBadge(g, sc),
-        rs && h('span.rede', { title: 'Redebeiträge im Zeitraum' }, '💬 ' + (rs.counts[st.id] || 0)),
-        ds.absent && h('span.tag.absent', 'fehlt')));
+        sc && scoreBadge(g, sc),
+        rs && h('span.rede', { title: 'Redebeiträge im Zeitraum' }, '💬 ' + (rs.counts[st.id] || 0))));
     attachTile(tile, g, plan, st, locked);
     canvas.append(tile);
   }
@@ -88,21 +93,26 @@ function overlaps(a, b) {
   return a.x < b.x + w && b.x < a.x + w && a.y < b.y + hh && b.y < a.y + hh;
 }
 
-// Personen ohne Platz automatisch in freie Plätze setzen (Reihen)
+// Personen ohne Platz automatisch in freie Plätze setzen – erste Reihe unten (an der Tafel)
 function placeMissing(plan, students, width) {
   const missing = students.filter(st => !plan.pos[st.id]);
   if (!missing.length) return false;
   const cols = Math.max(3, Math.floor((width - GRID) / (TW + GRID)));
   const stepX = (TW + GRID) / GRID, stepY = (TH + GRID) / GRID;
+  const rows = Math.ceil(students.length / cols);
   const taken = () => students.filter(s => plan.pos[s.id]).map(s => plan.pos[s.id]);
   let slot = 0;
   for (const st of missing) {
     for (;;) {
-      const cand = { x: 1 + (slot % cols) * stepX, y: TOP / GRID + Math.floor(slot / cols) * stepY };
+      const r = Math.floor(slot / cols); // Reihe 0 = vorne (unten)
+      const cand = { x: 1 + (slot % cols) * stepX, y: (rows - 1 - r) * stepY };
       slot++;
       if (!taken().some(o => overlaps(o, cand))) { plan.pos[st.id] = cand; break; }
     }
   }
+  // Falls Reihen oberhalb des Randes gelandet sind: alles nach unten verschieben
+  const minY = Math.min(...students.map(s => plan.pos[s.id].y));
+  if (minY < 0) for (const s of students) plan.pos[s.id].y -= minY;
   return true;
 }
 
@@ -127,7 +137,7 @@ function attachTile(tile, g, plan, st, locked) {
     }
     if (moved && !locked) {
       tile.style.left = Math.max(0, ox + dx) + 'px';
-      tile.style.top = Math.max(TOP, oy + dy) + 'px';
+      tile.style.top = Math.max(0, Math.min(tile.parentElement.offsetHeight - BOARD - TH, oy + dy)) + 'px';
     }
   });
   const end = (e, cancelled) => {
@@ -139,7 +149,7 @@ function attachTile(tile, g, plan, st, locked) {
     if (locked) return;
     if (cancelled) { render(); return; }
     const x = Math.round(tile.offsetLeft / GRID);
-    const y = Math.max(TOP / GRID, Math.round(tile.offsetTop / GRID));
+    const y = Math.max(0, Math.round(tile.offsetTop / GRID));
     const old = plan.pos[st.id];
     const other = Object.entries(plan.pos).find(([sid, q]) => sid !== st.id && q.x === x && q.y === y);
     if (other && old) plan.pos[other[0]] = { x: old.x, y: old.y };

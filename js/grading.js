@@ -1,58 +1,56 @@
-// Notenberechnung, Zeiträume, Anwesenheitsstatus, Hinweise
+// Punktekonto: Summe der Punkte im Zeitraum ÷ anwesende Stunden → Note über festen Schlüssel
 
-import { S, subjCfg, isSek2 } from './model.js';
-import { today, addDays, daysBetween, round2, clamp } from './util.js';
+import { subjCfg, isSek2 } from './model.js';
+import { today, daysBetween, fmtNum } from './util.js';
 
 export const catOf = (cfg, id) => cfg.cats.find(c => c.id === id);
 export const inRange = (date, p) => !!p && date >= p.start && date <= p.end;
+const EPS = 1e-9;
 
-// Wert eines Eintrags: Vorzeichen × Gewicht (neutrale Einträge = 0)
-export function entryValue(cfg, e) {
+// Punkte eines Eintrags laut Punktetabelle (wertungsfreie Einträge = 0)
+export function entryPoints(cfg, e) {
   const c = catOf(cfg, e.cat);
-  if (!c || c.neutral || !e.sign) return 0;
-  let w = Number(c.w) || 0;
+  if (!c || c.neutral) return 0;
   if (c.levels) {
     const l = c.levels.find(x => x.id === e.level);
-    w = l ? Number(l.w) || 0 : 0;
+    return l ? Number(l.pts) || 0 : 0;
   }
-  return e.sign * w;
-}
-
-export function writtenValue(cfg, r) {
-  const w = Number(cfg.written?.w) || 0;
-  if (r === '+') return w;
-  if (r === '-' || r === 'na') return -w;
+  if (e.sign > 0) return Number(c.plus) || 0;
+  if (e.sign < 0) return Number(c.minus) || 0;
   return 0;
 }
+
+// Bewertender Eintrag = zählt als Beobachtung (auch mit 0 Punkten, z. B. Hausaufgaben „vorhanden“)
+export function isRating(cfg, e) {
+  const c = catOf(cfg, e.cat);
+  return !!c && !c.neutral;
+}
+
+export function writtenPoints(cfg, r) {
+  const pts = (cfg.written && cfg.written.points) || {};
+  return r && r !== 'abs' ? Number(pts[r]) || 0 : 0;
+}
+
+export const fmtPts = x => (x > 0 ? '+' : x < 0 ? '−' : '') + fmtNum(Math.abs(x), Number.isInteger(x) ? 0 : 2);
+export const fmtPerLesson = x => (x > EPS ? '+' : x < -EPS ? '−' : '') + fmtNum(Math.abs(x), 2);
 
 export function entryLabel(cfg, e) {
   const c = catOf(cfg, e.cat);
   let s = c ? c.label : 'Unbekannte Kategorie';
-  if (c?.levels && e.level) {
+  if (c && c.levels) {
     const l = c.levels.find(x => x.id === e.level);
-    if (l) s += ' ' + l.label;
+    if (l) s += c.id === 'passiv' ? ` ${l.label}` : ` ${l.label} (${fmtPts(Number(l.pts))})`;
+  } else if (c && !c.neutral && e.sign) {
+    s += ' ' + fmtPts(entryPoints(cfg, e));
   }
-  if (e.sign > 0) s += ' +';
-  else if (e.sign < 0) s += ' −';
-  if (e.sub) s += ` (${e.sub})`;
+  if (e.sub) s += ` – ${e.sub}`;
   return s;
 }
 
 // ---------- Zeiträume ----------
 
 export function periodsOf(g) {
-  const out = [];
-  if (g.fach === 'sport') {
-    const start = g.periodStart || subjCfg(g).blockStart || today();
-    const k = Math.max(0, Math.floor(daysBetween(start, today()) / 28));
-    for (let i = 0; i <= Math.min(k, 60); i++) {
-      const s = addDays(start, 28 * i);
-      out.push({ id: 'B' + s, label: `Block ${i + 1}`, start: s, end: addDays(s, 27) });
-    }
-  } else {
-    for (const p of g.periods) out.push({ id: p.id, label: p.name, start: p.start, end: p.end });
-  }
-  // Abgeschlossene Zeiträume bleiben sichtbar, auch wenn sich das Startdatum später geändert hat
+  const out = g.periods.map(p => ({ id: p.id, label: p.name, start: p.start, end: p.end }));
   for (const [id, rec] of Object.entries(g.closed)) {
     if (!out.some(p => p.id === id) && Object.values(rec.results || {}).some(r => r.confirmed)) {
       out.push({ id, label: rec.label, start: rec.start, end: rec.end, orphan: true });
@@ -74,43 +72,7 @@ export function ensureRec(g, p) {
   return g.closed[p.id];
 }
 
-// ---------- Note ----------
-
-export function gradeOf(g, delta) {
-  if (isSek2(g)) {
-    const value = round2(clamp(8 + 3 * delta, 0, 15));
-    return { value, rounded: Math.round(value), trend: Math.sign(round2(value - 8)) };
-  }
-  const value = round2(clamp(3 - delta, 1, 6));
-  const rounded = S.data.settings.rounding === 'favor' ? Math.ceil(value - 0.5) : Math.round(value);
-  return { value, rounded: clamp(rounded, 1, 6), trend: Math.sign(round2(3 - value)) };
-}
-
-// n = Anzahl bewertender Beobachtungen (inkl. schriftlicher Aufgaben mit +, o, −, nicht abgegeben)
-export function scoreOf(g, sid, p) {
-  const cfg = subjCfg(g);
-  let delta = 0, n = 0, plus = 0, minus = 0;
-  for (const e of g.entries) {
-    if (e.sid !== sid || !inRange(e.date, p)) continue;
-    const v = entryValue(cfg, e);
-    if (!v) continue;
-    delta += v; n++;
-    if (v > 0) plus += v; else minus -= v;
-  }
-  if (g.fach === 'pb') {
-    for (const t of g.tasks) {
-      if (!inRange(t.date, p)) continue;
-      const r = t.results[sid];
-      if (!r || r === 'abs') continue;
-      const v = writtenValue(cfg, r);
-      delta += v; n++;
-      if (v > 0) plus += v; else minus -= v;
-    }
-  }
-  return { delta, n, plus, minus, ...gradeOf(g, delta) };
-}
-
-// ---------- Status in der aktuellen Stunde (= heute) ----------
+// ---------- Anwesenheit ----------
 
 export function dayStatus(g, sid, date) {
   let absent = null, exempt = null, limited = null;
@@ -121,6 +83,68 @@ export function dayStatus(g, sid, date) {
     else if (e.cat === 'eingeschraenkt' && e.date === date) limited = e;
   }
   return { absent, exempt, limited, inactive: !!(absent || exempt) };
+}
+
+// Gezählte Stunden im Zeitraum, an denen die Person anwesend war.
+// Abwesend → zählt nicht (außer „Entschuldigung nicht nachgereicht“), befreit → zählt nicht.
+export function attendedLessons(g, sid, p) {
+  let n = 0;
+  for (const date of g.lessons) {
+    if (!inRange(date, p)) continue;
+    const ds = dayStatus(g, sid, date);
+    if (ds.absent && !(ds.absent.extra && ds.absent.extra.excuse === 'nicht nachgereicht')) continue;
+    if (ds.exempt) continue;
+    n++;
+  }
+  return n;
+}
+
+export const lessonsIn = (g, p) => g.lessons.filter(d => inRange(d, p));
+
+// ---------- Note ----------
+
+export function gradeFor(g, perLesson) {
+  const key = subjCfg(g).key;
+  if (isSek2(g)) {
+    const list = [...key.sek2].sort((a, b) => b.pts - a.pts);
+    const hit = list.find(k => perLesson >= Number(k.min) - EPS);
+    return hit ? hit.pts : 0;
+  }
+  const list = [...key.sek1].sort((a, b) => a.grade - b.grade);
+  const hit = list.find(k => perLesson >= Number(k.min) - EPS);
+  return hit ? hit.grade : 6;
+}
+
+// Farbe/Tendenz: Noten 1–3 bzw. 7–15 P. gut, 4 bzw. 4–6 P. neutral, darunter schwach
+export function gradeTone(g, grade) {
+  if (isSek2(g)) return grade >= 7 ? 1 : grade >= 4 ? 0 : -1;
+  return grade <= 3 ? 1 : grade === 4 ? 0 : -1;
+}
+
+// sum = Punkte, lessons = anwesende Stunden, perLesson = Punktestand, n = bewertende Beobachtungen
+export function scoreOf(g, sid, p) {
+  const cfg = subjCfg(g);
+  let sum = 0, n = 0, plus = 0, minus = 0;
+  for (const e of g.entries) {
+    if (e.sid !== sid || !inRange(e.date, p) || !isRating(cfg, e)) continue;
+    const v = entryPoints(cfg, e);
+    sum += v; n++;
+    if (v > 0) plus += v; else minus -= v;
+  }
+  if (g.fach === 'pb') {
+    for (const t of g.tasks) {
+      if (!inRange(t.date, p)) continue;
+      const r = t.results[sid];
+      if (!r || r === 'abs') continue;
+      const v = writtenPoints(cfg, r);
+      sum += v; n++;
+      if (v > 0) plus += v; else minus -= v;
+    }
+  }
+  const lessons = attendedLessons(g, sid, p);
+  const perLesson = sum / Math.max(1, lessons);
+  const grade = gradeFor(g, perLesson);
+  return { sum, n, plus, minus, lessons, perLesson, grade, tone: gradeTone(g, grade) };
 }
 
 export function openExcuses(g) {

@@ -4,9 +4,9 @@ import { h } from '../util.js';
 import { save, subjCfg, isSek2, sortedStudents, studentLabel, findStudent } from '../model.js';
 import { render } from '../nav.js';
 import { openSheet, btn, confirmDialog, toast } from '../ui.js';
-import { scoreOf, ensureRec } from '../grading.js';
+import { scoreOf, ensureRec, fmtPerLesson, fmtPts } from '../grading.js';
 import { draftFeedback } from '../feedback.js';
-import { fmtValue, fmtGrade, studentSummary } from './common.js';
+import { fmtGrade, studentSummary, NOTE_ZERO } from './common.js';
 import { presentFeedback, presentSelf } from './present.js';
 
 export function openWizard(g, p, startSid) {
@@ -28,16 +28,17 @@ export function openWizard(g, p, startSid) {
       save();
     }
     sheet.setTitle(`${studentLabel(st)} · ${p.label} (${idx + 1}/${order.length})`);
-    let grade = r.confirmed ? r.grade : sc.rounded;
+    let grade = r.confirmed ? r.grade : sc.grade;
 
     // Vorschlag
     const nachweis = h('div');
     let nOpen = false;
     const proposal = h('section.card.proposal',
       h('div.prop-main',
-        h('div', h('small', 'Notenvorschlag'), h('div.big', `${fmtValue(g, sc.value)} → ${fmtGrade(g, sc.rounded)}`)),
-        h('div.muted.small', `aus ${sc.n} bewertenden Einträgen · Start bei ${sek2 ? '8 Punkten' : '3,0'}`),
-        r.confirmed && h('span.tag.ok', `bestätigt: ${fmtGrade(g, r.grade)}`)),
+        h('div', h('small', 'Notenvorschlag'), h('div.big', `${fmtPerLesson(sc.perLesson)} P./Std. → ${fmtGrade(g, sc.grade)}`)),
+        h('div.muted.small', `${fmtPts(sc.sum)} Punkte in ${sc.lessons} anwesenden Stunden · ${sc.n} bewertende Einträge · ${NOTE_ZERO}`),
+        r.confirmed && h('span.tag.ok', `bestätigt: ${fmtGrade(g, r.grade)}`),
+        r.confirmed && r.legacy && h('p.hint', 'Diese Note wurde vor dem Update im alten System bestätigt. Erneutes Bestätigen übernimmt den neuen Vorschlag als Vergleichswert.')),
       btn('Nachweis anzeigen', e => {
         nOpen = !nOpen;
         e.currentTarget.textContent = nOpen ? 'Nachweis ausblenden' : 'Nachweis anzeigen';
@@ -53,9 +54,9 @@ export function openWizard(g, p, startSid) {
     const updateGrades = () => {
       for (const b of gradeBtns.children) {
         b.classList.toggle('active', String(grade) === b.dataset.v);
-        b.classList.toggle('proposal', String(sc.rounded) === b.dataset.v);
+        b.classList.toggle('proposal', String(sc.grade) === b.dataset.v);
       }
-      reasonWrap.hidden = grade === sc.rounded;
+      reasonWrap.hidden = grade === sc.grade;
     };
     for (const n of [...values, null]) {
       gradeBtns.append(h('button.gbtn', { type: 'button', dataset: { v: String(n) }, onClick: () => { grade = n; updateGrades(); } },
@@ -119,9 +120,14 @@ export function openWizard(g, p, startSid) {
 
     const confirmAndNext = () => {
       r.grade = grade;
-      r.reason = grade !== sc.rounded ? reason.value.trim() : '';
-      r.proposal = sc.value;
-      r.proposalRounded = sc.rounded;
+      r.reason = grade !== sc.grade ? reason.value.trim() : '';
+      r.proposalPerLesson = sc.perLesson;
+      r.proposalGrade = sc.grade;
+      r.points = sc.sum;
+      r.lessons = sc.lessons;
+      delete r.legacy;
+      delete r.proposal;
+      delete r.proposalRounded;
       r.confirmed = true;
       r.confirmedAt = Date.now();
       save();

@@ -22,7 +22,7 @@ function collect(g, sid, p) {
     if (e.sub) s.subs.add(e.sub);
   }
   const list = Object.values(stats);
-  const w = s => Number(s.c.w) || 0.1;
+  const w = s => Math.max(1, Math.abs(Number(s.c.plus) || 0), Math.abs(Number(s.c.minus) || 0));
   return {
     plus: list.filter(s => s.plus > 0 && s.c.fb?.plus).sort((a, b) => b.plus * w(b) - a.plus * w(a)),
     minus: list.filter(s => s.minus > 0 && s.c.fb?.minus).sort((a, b) => b.minus * w(b) - a.minus * w(a)),

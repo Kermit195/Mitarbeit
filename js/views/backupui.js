@@ -2,7 +2,7 @@
 
 import { h } from '../util.js';
 import { S, save, replaceData } from '../model.js';
-import { buildBackupFile, shareFile, parseBackup, decryptBackup } from '../backup.js';
+import { buildBackupFile, shareFile, parseBackup, decryptBackup, backupPasswordHint } from '../backup.js';
 import { openSheet, toast, btn, formDialog, alertDialog, confirmDialog } from '../ui.js';
 import { render, go } from '../nav.js';
 import { clearUndo } from '../undo.js';
@@ -14,7 +14,7 @@ export async function createBackupFlow() {
   // Das Teilen-Menü muss direkt durch einen Fingertipp geöffnet werden – daher zweiter Schritt.
   const s = openSheet('Sicherung bereit', [
     h('p', h('strong', file.name), ` (${kb} KB)`),
-    h('p.muted', 'Die Datei ist mit dem App-Passwort verschlüsselt. Im Teilen-Menü z. B. „In Dateien sichern“ wählen und anschließend auf einen eigenen Datenträger (USB-Stick, eigener Rechner per AirDrop) übertragen. Datenschutzvorgaben der Schule beachten.'),
+    h('p.muted', 'Die Datei ist mit dem Sicherungspasswort verschlüsselt. Im Teilen-Menü z. B. „In Dateien sichern“ wählen und anschließend auf einen eigenen Datenträger (USB-Stick, eigener Rechner per AirDrop) übertragen. Datenschutzvorgaben der Schule beachten.'),
     h('div.btnrow',
       btn('Abbrechen', () => s.close(), 'ghost'),
       btn('Teilen / Sichern …', async () => {
@@ -45,8 +45,8 @@ export function restoreFlow() {
     const res = await formDialog({
       title: 'Sicherung laden',
       intro: h('div',
-        h('p', `Sicherung vom ${new Date(p.created).toLocaleString('de-DE')}.`),
-        h('p.warnbox', 'Achtung: Alle aktuellen Daten auf diesem Gerät werden durch die Sicherung ersetzt. Das App-Passwort bleibt unverändert.')),
+        h('p', `Sicherung vom ${new Date(p.created).toLocaleString('de-DE')}. ${backupPasswordHint(p)}`),
+        h('p.warnbox', 'Achtung: Alle aktuellen Daten auf diesem Gerät werden durch die Sicherung ersetzt. PIN und Sicherungspasswort bleiben unverändert.')),
       fields: [{ name: 'pw', label: 'Passwort der Sicherung', type: 'password', required: true }],
       ok: 'Weiter',
     });

@@ -284,12 +284,12 @@ ul.plain li { margin: .25em 0; }
 /* ---------- Sitzplan (PB) ---------- */
 
 .seat-wrap { overflow: auto; -webkit-overflow-scrolling: touch; border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface); }
-.seat-canvas { position: relative; min-height: 400px; }
+.seat-canvas { position: relative; }
 .seat-canvas.unlocked {
   background-image: radial-gradient(circle, var(--border) 1px, transparent 1.2px);
   background-size: 16px 16px;
 }
-.board { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); width: min(60%, 480px); text-align: center; padding: 8px; border-radius: 8px; background: var(--surface2); color: var(--muted); font-weight: 700; letter-spacing: .1em; }
+.board { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); width: min(60%, 480px); text-align: center; padding: 8px; border-radius: 8px; background: var(--surface2); color: var(--muted); font-weight: 700; letter-spacing: .1em; }
 .seat {
   position: absolute; background: var(--surface); border: 2px solid var(--border); border-radius: 14px;
   padding: 8px 10px; display: flex; flex-direction: column; justify-content: space-between;
@@ -513,6 +513,41 @@ body.presenting #app, body.presenting .overlay, body.presenting .toast { display
 .strow { display: flex; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); }
 .strow input { flex: 1; }
 .strow input.kuerzel { flex: none; width: 96px; }
+
+/* ---------- Version 2: PIN, Punkte, Schlüssel, Stunden ---------- */
+
+.pinpad { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 8px; }
+.pin-dots { display: flex; gap: 18px; margin: 6px 0; }
+.pin-dot { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--muted); }
+.pin-dot.on { background: var(--primary); border-color: var(--primary); }
+.pin-msg { min-height: 1.4em; margin: 0; text-align: center; color: var(--muted); font-weight: 600; }
+.pin-msg.error { color: var(--danger); }
+.pin-grid { display: grid; grid-template-columns: repeat(3, 84px); gap: 12px; }
+.pin-key { font: inherit; font-size: 1.8rem; font-weight: 700; width: 84px; height: 84px; border-radius: 50%; border: 1px solid var(--border); background: var(--surface2); color: var(--text); cursor: pointer; touch-action: manipulation; }
+.pin-key:active { background: var(--primary-soft); }
+.pin-key:disabled { opacity: .4; }
+.pin-key.del { font-size: 1.4rem; background: transparent; }
+.pinpad.shake { animation: shake .3s; }
+@keyframes shake { 25% { transform: translateX(-8px); } 75% { transform: translateX(8px); } }
+.step-label { font-size: .85rem; font-weight: 700; color: var(--primary); text-transform: uppercase; letter-spacing: .05em; margin: 0 0 4px; }
+.auth-card .btn.big { width: 100%; }
+
+.chip-static { font-weight: 600; font-size: .95rem; padding: 8px 14px; border-radius: 999px; }
+.chip-static.ok { background: var(--plus-bg); color: var(--plus); }
+.rb.level.short { min-width: 58px; font-size: 1.2rem; }
+.sum-pts { margin-left: 8px; min-width: 40px; text-align: right; }
+.tag.ha { background: var(--pb-soft); color: var(--pb); }
+.seat-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 4px; min-width: 0; }
+.seat-top .tag { margin: 0; flex: none; }
+.seat .trend { font-size: .8rem; padding: 2px 6px; }
+.points-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0 12px; }
+.key-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 0 10px; }
+.key-grid.sek2 { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
+.key-below { min-height: 46px; display: flex; align-items: center; color: var(--muted); font-weight: 600; }
+.lessons > summary { font-weight: 700; cursor: pointer; min-height: 40px; display: flex; align-items: center; }
+.lesson-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.lesson-chip { display: inline-flex; align-items: center; gap: 4px; background: var(--surface2); border-radius: 999px; padding: 4px 4px 4px 12px; font-weight: 600; font-size: .9rem; }
+.lesson-chip button { font: inherit; border: 0; background: transparent; color: var(--muted); width: 32px; height: 32px; border-radius: 50%; cursor: pointer; }
 
 /* ---------- Hochformat / kleine Breiten ---------- */
 

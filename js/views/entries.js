@@ -1,10 +1,10 @@
 // Nachweis: Einträge einsehen, bearbeiten, löschen
 
 import { h, fmtDate, fmtShort, weekday } from '../util.js';
-import { save, subjCfg, sortedStudents, studentLabel, findStudent } from '../model.js';
+import { save, subjCfg, sortedStudents, studentLabel, findStudent, addLesson } from '../model.js';
 import { go, render } from '../nav.js';
 import { formDialog, confirmDialog } from '../ui.js';
-import { periodsOf, currentPeriod, inRange, catOf, entryLabel } from '../grading.js';
+import { periodsOf, currentPeriod, inRange, catOf, entryLabel, entryPoints, isRating, fmtPts } from '../grading.js';
 import { pushUndo } from '../undo.js';
 import { studentSummary } from './common.js';
 
@@ -52,9 +52,11 @@ function extraText(g, e) {
 
 function entryRow(g, e, showName) {
   const cfg = subjCfg(g);
-  const kind = e.sign > 0 ? 'plus' : e.sign < 0 ? 'minus' : 'neutral';
+  const pts = entryPoints(cfg, e);
+  const rating = isRating(cfg, e);
+  const kind = pts > 0 ? 'plus' : pts < 0 ? 'minus' : 'neutral';
   return h('button.entry', { type: 'button', onClick: () => editEntry(g, e) },
-    h('span.e-sign.' + kind, e.sign > 0 ? '+' : e.sign < 0 ? '−' : '•'),
+    h('span.e-sign.' + kind, rating ? fmtPts(pts) : '•'),
     h('span.e-main',
       showName && h('strong', studentLabel(findStudent(g, e.sid)) + ': '),
       entryLabel(cfg, e), extraText(g, e),
@@ -69,8 +71,10 @@ async function editEntry(g, e) {
     { name: 'date', label: 'Datum', type: 'date', value: e.date, required: true },
     { name: 'stunde', label: 'Stunde', type: 'number', min: 0, max: 12, value: e.stunde || '' },
   ];
-  if (c && c.plus && c.minus) fields.push({ name: 'sign', label: 'Wertung', type: 'select', options: [['1', '+ positiv'], ['-1', '− negativ']], value: String(e.sign) });
-  if (c && c.levels) fields.push({ name: 'level', label: 'Anforderungsbereich', type: 'select', options: c.levels.map(l => [l.id, l.label]), value: e.level });
+  if (c && !c.levels && Number.isFinite(c.plus) && Number.isFinite(c.minus)) {
+    fields.push({ name: 'sign', label: 'Wertung', type: 'select', options: [['1', `${fmtPts(c.plus)} Punkte`], ['-1', `${fmtPts(c.minus)} Punkte`]], value: String(e.sign) });
+  }
+  if (c && c.levels) fields.push({ name: 'level', label: 'Stufe', type: 'select', options: c.levels.map(l => [l.id, `${l.label} (${fmtPts(Number(l.pts))})`]), value: e.level });
   if (c && c.subs && c.subs.length) {
     const subs = c.subs.includes(e.sub) || !e.sub ? c.subs : [...c.subs, e.sub];
     fields.push({ name: 'sub', label: 'Unterkategorie', type: 'select', options: [['', '– ohne –'], ...subs.map(s => [s, s])], value: e.sub || '' });
@@ -103,7 +107,12 @@ async function editEntry(g, e) {
   e.date = res.date;
   e.stunde = res.stunde || 0;
   if ('sign' in res) e.sign = Number(res.sign);
-  if ('level' in res) e.level = res.level;
+  if ('level' in res) {
+    e.level = res.level;
+    const l = c.levels.find(x => x.id === res.level);
+    e.sign = l ? Math.sign(Number(l.pts)) : 0;
+  }
+  addLesson(g, e.date);
   if ('sub' in res) { if (res.sub) e.sub = res.sub; else delete e.sub; }
   if (e.cat === 'befreit') e.extra = { ...e.extra, bis: res.bis, attest: res.attest };
   if ('excuse' in res) e.extra = { ...e.extra, excuse: res.excuse };

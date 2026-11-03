@@ -1,18 +1,21 @@
 // Verschlüsselte Sicherungsdatei erstellen und lesen
+// Format 2: verschlüsselt mit dem Sicherungspasswort. Format 1 (alte Version): mit dem damaligen App-Passwort.
+// Beide Formate werden identisch entschlüsselt (PBKDF2 → AES-GCM).
 
-import { S, flush, migrate } from './model.js';
+import { S, flush, migrate, getBackupKey } from './model.js';
 import { encryptJSON, decryptJSON, deriveKey, toB64, fromB64 } from './crypto.js';
 import { isoDate, pad } from './util.js';
 
 export async function buildBackupFile() {
   await flush();
-  const { iv, ct } = await encryptJSON(S.key, S.data);
+  const bk = await getBackupKey();
+  const { iv, ct } = await encryptJSON(bk.key, S.data);
   const payload = {
     app: 'Mitarbeit',
-    format: 1,
+    format: 2,
     schemaVersion: S.data.schemaVersion,
     created: new Date().toISOString(),
-    kdf: { name: 'PBKDF2', hash: 'SHA-256', iterations: S.meta.iter, salt: toB64(S.meta.salt) },
+    kdf: { name: 'PBKDF2', hash: 'SHA-256', iterations: bk.iter, salt: toB64(bk.salt) },
     cipher: { name: 'AES-GCM', iv: toB64(iv) },
     data: toB64(ct),
   };
@@ -47,12 +50,15 @@ export async function parseBackup(file) {
   return p;
 }
 
-// Ergebnis: { data, key, salt, iter } oder null bei falschem Passwort
+// Hinweis, welches Passwort die Datei braucht
+export const backupPasswordHint = p => (p.format === 1
+  ? 'Sicherung aus Version 1: Passwort ist das damalige App-Passwort.'
+  : 'Passwort ist das Sicherungspasswort, das beim Erstellen galt.');
+
+// Ergebnis: { data } oder null bei falschem Passwort
 export async function decryptBackup(p, password) {
-  const salt = fromB64(p.kdf.salt);
-  const iter = Number(p.kdf.iterations);
-  const key = await deriveKey(password, salt, iter);
+  const key = await deriveKey(password, fromB64(p.kdf.salt), Number(p.kdf.iterations));
   let data;
   try { data = await decryptJSON(key, fromB64(p.cipher.iv), fromB64(p.data)); } catch { return null; }
-  return { data: migrate(data), key, salt, iter };
+  return { data: migrate(data) };
 }

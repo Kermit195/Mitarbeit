@@ -1,27 +1,27 @@
 // Gemeinsame Bausteine der Lerngruppen-Ansichten
 
-import { h, fmtShort, fmtNum, fmtDate, weekday } from '../util.js';
-import { S, save, subjCfg, isSek2, findStudent, studentLabel, addEntries } from '../model.js';
+import { h, fmtShort, fmtDate, weekday, today, fmtNum } from '../util.js';
+import { save, subjCfg, isSek2, findStudent, studentLabel, addEntries, addLesson } from '../model.js';
 import { render, go } from '../nav.js';
 import { openSheet, btn } from '../ui.js';
-import { hintsOf, openExcuses, catOf, scoreOf, inRange, redeStats, entryValue } from '../grading.js';
+import {
+  hintsOf, openExcuses, catOf, scoreOf, inRange, redeStats, entryPoints, isRating,
+  fmtPts, fmtPerLesson, writtenPoints, lessonsIn,
+} from '../grading.js';
 import { pushUndo } from '../undo.js';
 
 // Auswahlzustand (Mehrfachauswahl)
 export const sel = { gid: null, multi: false, ids: new Set() };
 export function resetSel(gid) { sel.gid = gid; sel.multi = false; sel.ids.clear(); }
 
-export const fmtValue = (g, v) => (isSek2(g) ? fmtNum(v, 2) + ' P.' : fmtNum(v, 2));
 export const fmtGrade = (g, n) => (n === null || n === undefined ? '–' : isSek2(g) ? `${n} P.` : String(n));
-export function fmtWeight(g, w) {
-  const x = isSek2(g) ? w * 3 : w;
-  return fmtNum(x, 2).replace(/0$/, '') + (isSek2(g) ? ' P.' : '');
-}
+export const NOTE_ZERO = 'Ohne Einträge: 0 Punkte = Note 4';
 
-export function trendBadge(g, sc) {
-  const cls = sc.trend > 0 ? 'up' : sc.trend < 0 ? 'down' : 'flat';
-  const arrow = sc.trend > 0 ? '▲' : sc.trend < 0 ? '▼' : '●';
-  return h('span.trend.' + cls, { title: 'Zwischenstand im aktuellen Zeitraum' }, `${arrow} ${fmtNum(sc.value, 1)}`);
+// Punktestand pro anwesende Stunde und vorläufige Note, z. B. „+0,45 · 3“
+export function scoreBadge(g, sc) {
+  const cls = sc.tone > 0 ? 'up' : sc.tone < 0 ? 'down' : 'flat';
+  return h('span.trend.' + cls, { title: `Punkte pro anwesende Stunde · vorläufige Note (${sc.sum} Punkte in ${sc.lessons} Std.)` },
+    `${fmtPerLesson(sc.perLesson)} · ${fmtGrade(g, sc.grade)}`);
 }
 
 // Tippen = Bewertungsmenü (bzw. Auswahl), langes Drücken = Mehrfachauswahl starten
@@ -49,6 +49,16 @@ export function infoBar(g, p) {
   const items = [];
   if (p) items.push(h('span.period', `${p.label} · ${fmtShort(p.start)}–${fmtShort(p.end)}`));
   else items.push(h('button.chip-btn.warn', { type: 'button', onClick: () => go({ name: 'group', groupId: g.id, tab: 'zeitraum' }) }, 'Noch kein Zeitraum – jetzt anlegen'));
+  const t = today();
+  if (g.lessons.includes(t)) {
+    items.push(h('span.chip-static.ok', { title: 'Heute zählt als Stunde. Entfernen unter „Zeiträume & Noten“.' }, '✓ Heute als Stunde gezählt'));
+  } else {
+    items.push(h('button.chip-btn', {
+      type: 'button',
+      title: 'Wird automatisch beim ersten Eintrag des Tages gezählt',
+      onClick: () => { pushUndo(g, 'Stunde gezählt'); addLesson(g, t); save(); render(); },
+    }, '＋ Heutige Stunde zählen'));
+  }
   if (g.fach === 'sport') {
     const ex = openExcuses(g);
     if (ex.length) {
@@ -65,7 +75,7 @@ export function infoBar(g, p) {
     type: 'button',
     onClick: () => { sel.multi = !sel.multi; sel.ids.clear(); render(); },
   }, sel.multi ? '✓ Mehrfachauswahl beenden' : '☐ Mehrfachauswahl'));
-  return h('div.infobar', items);
+  return [h('div.infobar', items), h('p.hint', `Anzeige: Punkte pro anwesende Stunde · vorläufige Note. ${NOTE_ZERO}.`)];
 }
 
 export function selectionBar(activeIds, onGive) {
@@ -91,7 +101,7 @@ export function openExcuseSheet(g) {
     const list = openExcuses(g);
     if (!list.length) { s.setBody(h('p.empty', 'Keine offenen Entschuldigungen.')); return; }
     s.setBody([
-      h('p.muted', `Frist: ${cfg.thresholds.excuseDays} Tage. Danach schlägt die App den Eintrag „Entschuldigung nicht nachgereicht“ vor.`),
+      h('p.muted', `Frist: ${cfg.thresholds.excuseDays} Tage. Danach schlägt die App den Eintrag „Entschuldigung nicht nachgereicht“ vor (${fmtPts(Number(catOf(cfg, 'entschuldigung').minus))}; die Fehlstunde zählt dann wie eine anwesende Stunde).`),
       list.map(({ e, days, overdue }) => h('div.excuse-row' + (overdue ? '.overdue' : ''),
         h('div', h('strong', studentLabel(findStudent(g, e.sid))),
           h('div.small.muted', `gefehlt am ${weekday(e.date)} ${fmtDate(e.date)} · vor ${days} ${days === 1 ? 'Tag' : 'Tagen'}`)),
@@ -123,6 +133,7 @@ export function openHintsSheet(g, p) {
     h('h3', `Häufungen (ab ${cfg.thresholds.haeufung}× derselbe Minus-Eintrag)`),
     hi.haeufung.length ? h('ul.plain', hi.haeufung.map(x => h('li', link(x.sid), ` – ${x.n}× ${x.label}`))) : h('p.muted', 'Keine.'),
     h('h3', `Beobachtungslücken (weniger als ${cfg.thresholds.luecke} bewertende Einträge)`),
+    h('p.muted.small', NOTE_ZERO + ' – wenige Einträge bedeuten daher meist Note 4.'),
     hi.luecken.length ? h('ul.plain', hi.luecken.map(x => h('li', link(x.sid), ` – ${x.n} ${x.n === 1 ? 'Eintrag' : 'Einträge'}`))) : h('p.muted', 'Keine.'),
   ]);
 }
@@ -134,23 +145,24 @@ export function studentSummary(g, sid, p) {
   if (p) {
     const sc = scoreOf(g, sid, p);
     box.append(h('div.sum-head',
-      h('div', h('div.big', fmtValue(g, sc.value)), h('small', 'Zwischenstand')),
-      h('div', h('div.big', fmtGrade(g, sc.rounded)), h('small', isSek2(g) ? 'gerundet' : 'gerundete Note')),
-      h('div', h('div.big', String(sc.n)), h('small', 'bewertende Einträge')),
-      h('div', h('div.big.plus', '+' + fmtNum(sc.plus * (isSek2(g) ? 3 : 1), 2)), h('small', 'Summe Plus')),
-      h('div', h('div.big.minus', '−' + fmtNum(sc.minus * (isSek2(g) ? 3 : 1), 2)), h('small', 'Summe Minus'))));
+      h('div', h('div.big', fmtPerLesson(sc.perLesson)), h('small', 'Punkte pro Stunde')),
+      h('div', h('div.big', fmtGrade(g, sc.grade)), h('small', 'vorläufige Note')),
+      h('div', h('div.big', fmtPts(sc.sum) || '0'), h('small', 'Punkte gesamt')),
+      h('div', h('div.big', `${sc.lessons}/${lessonsIn(g, p).length}`), h('small', 'anwesend / gezählte Std.')),
+      h('div', h('div.big', String(sc.n)), h('small', 'bewertende Einträge'))));
+    box.append(h('p.muted.small', NOTE_ZERO + '.'));
   }
   const per = new Map();
   for (const e of g.entries) {
     if (e.sid !== sid || (p && !inRange(e.date, p))) continue;
     const c = catOf(cfg, e.cat);
     if (!c) continue;
-    let key = c.label;
-    if (c.levels && e.level) key += ' ' + (c.levels.find(l => l.id === e.level)?.label || '');
-    if (!per.has(key)) per.set(key, { plus: 0, minus: 0, neutral: 0, neutralCat: !!c.neutral, w: 0 });
-    const r = per.get(key);
-    if (e.sign > 0) r.plus++; else if (e.sign < 0) r.minus++; else r.neutral++;
-    r.w += entryValue(cfg, e);
+    if (!per.has(c.label)) per.set(c.label, { plus: 0, minus: 0, zero: 0, pts: 0, rating: isRating(cfg, e) });
+    const r = per.get(c.label);
+    const v = entryPoints(cfg, e);
+    if (!r.rating) r.zero++;
+    else if (v > 0) r.plus++; else if (v < 0) r.minus++; else r.zero++;
+    r.pts += v;
   }
   if (per.size) {
     box.append(h('h4', 'Einträge nach Kategorie'), h('ul.sum-list', [...per.entries()].map(([k, r]) =>
@@ -158,7 +170,8 @@ export function studentSummary(g, sid, p) {
         h('span.sum-counts',
           r.plus ? h('span.badge.plus', `${r.plus}× +`) : null,
           r.minus ? h('span.badge.minus', `${r.minus}× −`) : null,
-          r.neutral ? h('span.badge.neutral', `${r.neutral}×`) : null)))));
+          r.zero ? h('span.badge.neutral', `${r.zero}×${r.rating ? ' 0' : ''}`) : null,
+          r.rating ? h('strong.sum-pts', fmtPts(r.pts) || '0') : h('span.muted.small', 'wertungsfrei'))))));
   }
   if (g.fach === 'pb' && p) {
     const rs = redeStats(g, p);
@@ -168,8 +181,11 @@ export function studentSummary(g, sid, p) {
     const tasks = g.tasks.filter(t => inRange(t.date, p)).sort((a, b) => a.date.localeCompare(b.date));
     if (tasks.length) {
       const lbl = { '+': '+', o: 'o', '-': '−', na: 'nicht abgegeben', abs: 'nicht anwesend' };
-      box.append(h('h4', 'Schriftliche Aufgaben'), h('ul.sum-list', tasks.map(t =>
-        h('li', h('span', `${fmtShort(t.date)} ${t.title} (${t.art})`), h('span', lbl[t.results[sid]] || 'offen')))));
+      box.append(h('h4', 'Schriftliche Aufgaben'), h('ul.sum-list', tasks.map(t => {
+        const r = t.results[sid];
+        return h('li', h('span', `${fmtShort(t.date)} ${t.title} (${t.art})`),
+          h('span', lbl[r] || 'offen', r && r !== 'abs' ? h('strong.sum-pts', fmtPts(writtenPoints(cfg, r)) || '0') : null));
+      })));
     }
   }
   if (p) {
@@ -179,7 +195,8 @@ export function studentSummary(g, sid, p) {
   const hist = Object.values(g.closed).filter(r => r.closedAt && r.results[sid]?.confirmed).sort((a, b) => a.start.localeCompare(b.start));
   if (hist.length) {
     box.append(h('h4', 'Verlauf abgeschlossener Zeiträume'), h('ul.sum-list', hist.map(r =>
-      h('li', h('span', `${r.label} (${fmtShort(r.start)}–${fmtShort(r.end)})`), h('strong', fmtGrade(g, r.results[sid].grade))))));
+      h('li', h('span', `${r.label} (${fmtShort(r.start)}–${fmtShort(r.end)})${r.results[sid].legacy ? ' · altes System' : ''}`),
+        h('strong', fmtGrade(g, r.results[sid].grade))))));
   }
   return box;
 }

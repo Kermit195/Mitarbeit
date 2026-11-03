@@ -1,10 +1,10 @@
 // PB: Reiter „Schriftlich“ – Aufgaben anlegen und bewerten
 
 import { h, uid, today, fmtDate, fmtShort, weekday } from '../util.js';
-import { save, subjCfg, sortedStudents, studentLabel } from '../model.js';
+import { save, subjCfg, sortedStudents, studentLabel, addLesson } from '../model.js';
 import { go, render } from '../nav.js';
 import { btn, formDialog, confirmDialog, openSheet, segmented } from '../ui.js';
-import { periodsOf, currentPeriod, inRange, dayStatus } from '../grading.js';
+import { periodsOf, currentPeriod, inRange, dayStatus, fmtPts } from '../grading.js';
 import { pushUndo } from '../undo.js';
 import { emptyStudents } from './common.js';
 
@@ -35,7 +35,8 @@ export function renderWritten(main, g, v) {
     segmented([['liste', 'Liste'], ['matrix', 'Übersicht']], mode, m => go({ ...v, mode: m, periodId: pid })),
     h('span.spacer'),
     btn('＋ Aufgabe anlegen', () => newTask(g), 'primary')));
-  main.append(h('p.hint', `+ und − zählen mit Gewicht ${String(subjCfg(g).written.w).replace('.', ',')} zur Mitarbeitsnote, „nicht abgegeben“ zählt als −, o und „nicht anwesend“ sind neutral.`));
+  const pts = subjCfg(g).written.points;
+  main.append(h('p.hint', `Punkte: + ${fmtPts(pts['+'])} · o ${fmtPts(pts.o)} · − ${fmtPts(pts['-'])} · nicht abgegeben ${fmtPts(pts.na)} · nicht anwesend wertungsfrei (wird bei Abwesenheit automatisch gesetzt).`));
 
   const tasks = g.tasks.filter(t => !p || inRange(t.date, p)).sort((a, b) => b.date.localeCompare(a.date));
   if (!tasks.length) { main.append(h('p.empty', 'Noch keine schriftlichen Aufgaben in diesem Zeitraum.')); return; }
@@ -100,6 +101,7 @@ async function newTask(g) {
   const t = { id: uid(), title: res.title, date: res.date, art: res.art, results: {} };
   for (const st of g.students) if (dayStatus(g, st.id, res.date).absent) t.results[st.id] = 'abs';
   g.tasks.push(t);
+  addLesson(g, res.date);
   save();
   render();
   openTask(g, t);
@@ -161,6 +163,8 @@ async function editTask(g, t, rebuild) {
   if (!res) return;
   pushUndo(g, `Aufgabe „${t.title}“ bearbeitet`);
   Object.assign(t, res);
+  addLesson(g, t.date);
+  for (const st of g.students) if (dayStatus(g, st.id, t.date).absent) t.results[st.id] = 'abs';
   save();
   rebuild();
 }

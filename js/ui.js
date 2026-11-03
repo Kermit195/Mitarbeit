@@ -93,6 +93,7 @@ export function formDialog({ title, fields, ok = 'Speichern', intro, danger = fa
       if (f.type === 'checkbox') input.checked = !!f.value;
       else if (f.value !== undefined && f.value !== null) input.value = f.value;
       inputs[f.name] = input;
+      if (f.onChange) input.addEventListener('change', () => f.onChange(inputs));
       if (f.type === 'checkbox') return h('label.check', input, h('span', f.label));
       return h('label.field', h('span', f.label), input, f.help && h('small', f.help));
     });

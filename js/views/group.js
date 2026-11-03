@@ -7,7 +7,7 @@ import { topbar, toast } from '../ui.js';
 import { SUBJECT_LABELS, SUBJECT_NAMES } from '../defaults.js';
 import { canUndo, undo, lastUndoLabel } from '../undo.js';
 import { currentPeriod, scoreOf, dayStatus } from '../grading.js';
-import { sel, resetSel, infoBar, selectionBar, trendBadge, pressable, emptyStudents } from './common.js';
+import { sel, resetSel, infoBar, selectionBar, scoreBadge, pressable, emptyStudents } from './common.js';
 import { openRateSheet, tapStudent, longStudent } from './rate.js';
 import { renderSeatplan } from './seatplan.js';
 import { renderWritten } from './written.js';
@@ -72,7 +72,7 @@ function renderSportList(main, g) {
   if (!g.students.length) { main.append(emptyStudents(g)); return; }
   const p = currentPeriod(g);
   const t = today();
-  main.append(infoBar(g, p));
+  main.append(...infoBar(g, p));
   const rows = sortedStudents(g).map(st => ({ st, ds: dayStatus(g, st.id, t) }));
   rows.sort((a, b) => a.ds.inactive - b.ds.inactive); // stabil: Abwesende/Befreite ans Ende
   const grid = h('div.sgrid');
@@ -84,7 +84,7 @@ function renderSportList(main, g) {
     if (ds.limited) tags.push(h('span.tag.limited', 'eingeschränkt'));
     const card = h('div.scard' + (ds.inactive ? '.inactive' : '') + (sel.ids.has(st.id) ? '.selected' : ''),
       { role: 'button', tabindex: 0, 'aria-label': studentLabel(st) },
-      h('div.scard-top', h('span.sname', studentLabel(st)), sc && trendBadge(g, sc)),
+      h('div.scard-top', h('span.sname', studentLabel(st)), sc && scoreBadge(g, sc)),
       h('div.scard-status', tags));
     pressable(card, () => tapStudent(g, st.id), () => longStudent(g, st.id));
     grid.append(card);

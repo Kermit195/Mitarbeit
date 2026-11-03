@@ -4,9 +4,9 @@ import { h, today, addDays, fmtShort, fmtNum } from '../util.js';
 import { subjCfg, findStudent, studentLabel, addEntries, save } from '../model.js';
 import { render, go } from '../nav.js';
 import { openSheet, toast, btn, segmented } from '../ui.js';
-import { currentPeriod, scoreOf, dayStatus, entryLabel, countMinus, redeStats, hintsOf } from '../grading.js';
+import { currentPeriod, scoreOf, dayStatus, entryLabel, countMinus, redeStats, hintsOf, fmtPts, fmtPerLesson } from '../grading.js';
 import { pushUndo, undo } from '../undo.js';
-import { sel, fmtValue, fmtWeight } from './common.js';
+import { sel, fmtGrade, NOTE_ZERO } from './common.js';
 
 export function tapStudent(g, sid) {
   if (sel.multi) {
@@ -22,6 +22,8 @@ export function longStudent(g, sid) {
   sel.ids.add(sid);
   render();
 }
+
+const kindOf = pts => (pts > 0 ? 'plus' : pts < 0 ? 'minus' : 'neutral');
 
 export function openRateSheet(g, sids) {
   sids = sids.filter(id => findStudent(g, id));
@@ -40,11 +42,18 @@ export function openRateSheet(g, sids) {
   const commit = o => {
     const label = entryLabel(cfg, o);
     pushUndo(g, `${who}: ${label}`);
-    addEntries(g, sids, { ...o, note: note.trim() });
+    const { skipped } = addEntries(g, sids, { ...o, note: note.trim() });
     sheet.close();
     if (sel.multi) { sel.multi = false; sel.ids.clear(); }
     render();
+    const skippedNames = skipped.map(id => findStudent(g, id).vorname).join(', ');
+    if (skipped.length === sids.length) {
+      undo(); // nichts eingetragen – leeren Rückgängig-Schritt entfernen
+      toast(`Nicht eingetragen: ${skippedNames} ${skipped.length === 1 ? 'ist' : 'sind'} heute nicht anwesend.`);
+      return;
+    }
     let msg = `✓ ${who}: ${label}`;
+    if (skipped.length) msg += ` · nicht anwesend: ${skippedNames}`;
     if (o.sign < 0) {
       const p = currentPeriod(g);
       const th = cfg.thresholds.haeufung;
@@ -56,8 +65,9 @@ export function openRateSheet(g, sids) {
 
   const choose = (c, sign, level) => {
     if (c.id === 'befreit') return exemptForm(c);
-    if (c.subs && c.subs.length) return subStep(c, sign, level);
-    commit({ cat: c.id, sign, level: level && level.id });
+    const s = level ? Math.sign(Number(level.pts)) : sign;
+    if (c.subs && c.subs.length) return subStep(c, s, level);
+    commit({ cat: c.id, sign: s, level: level && level.id });
   };
 
   const stepHead = text => h('div.step-head', btn('‹ zurück', showMain, 'ghost'), h('strong', text));
@@ -91,15 +101,20 @@ export function openRateSheet(g, sids) {
   const catRow = c => {
     const b = [];
     if (c.levels) {
-      for (const l of c.levels) b.push(h('button.rb.plus.level', { type: 'button', onClick: () => choose(c, 1, l) }, `+ ${l.label}`, h('small', fmtWeight(g, l.w))));
+      for (const l of c.levels) {
+        const pts = Number(l.pts);
+        const short = c.id === 'passiv';
+        b.push(h(`button.rb.${kindOf(pts)}.level` + (short ? '.short' : ''), { type: 'button', onClick: () => choose(c, Math.sign(pts), l) },
+          short ? l.label : h('span', l.label), short ? null : h('small', fmtPts(pts))));
+      }
     } else if (c.neutral) {
       b.push(h('button.rb.neutral', { type: 'button', onClick: () => choose(c, 0) }, 'eintragen'));
     } else {
-      if (c.plus) b.push(h('button.rb.plus', { type: 'button', 'aria-label': c.label + ' plus', onClick: () => choose(c, 1) }, '+'));
-      if (c.minus) b.push(h('button.rb.minus', { type: 'button', 'aria-label': c.label + ' minus', onClick: () => choose(c, -1) }, '−'));
+      if (Number.isFinite(c.plus)) b.push(h('button.rb.plus', { type: 'button', 'aria-label': `${c.label} ${fmtPts(c.plus)}`, onClick: () => choose(c, 1) }, fmtPts(c.plus)));
+      if (Number.isFinite(c.minus)) b.push(h('button.rb.minus', { type: 'button', 'aria-label': `${c.label} ${fmtPts(c.minus)}`, onClick: () => choose(c, -1) }, fmtPts(c.minus)));
     }
     return h('div.catrow' + (c.levels ? '.wide' : ''),
-      h('div.catlabel', h('span', c.label, !c.neutral && !c.levels ? h('span.weight', fmtWeight(g, c.w)) : null), c.hint && h('small', c.hint)),
+      h('div.catlabel', h('span', c.label), c.hint && h('small', c.hint)),
       h('div.rbtns', b));
   };
 
@@ -110,7 +125,8 @@ export function openRateSheet(g, sids) {
     const items = [];
     if (p) {
       const sc = scoreOf(g, st.id, p);
-      items.push(h('span', 'Zwischenstand ', h('strong', fmtValue(g, sc.value)), ` · ${sc.n} bewertende Einträge`));
+      items.push(h('span', 'Punktestand ', h('strong', fmtPerLesson(sc.perLesson)), ' pro Stunde · vorläufig ', h('strong', fmtGrade(g, sc.grade)),
+        ` · ${sc.sum} Punkte in ${sc.lessons} Std.`));
       if (g.fach === 'pb') {
         const rs = redeStats(g, p);
         items.push(h('span', `Redebeiträge: ${rs.counts[st.id] || 0} (Ø ${fmtNum(rs.avg, 1)})`));
@@ -148,6 +164,7 @@ export function openRateSheet(g, sids) {
       parts.push(h('h3.sec-title', sec.label));
       parts.push(h('div.catlist', cats.map(catRow)));
     }
+    parts.push(h('p.muted.small', NOTE_ZERO + '. Abwesenheit ist wertungsfrei und zählt nicht als Stunde.'));
     sheet.setBody(parts);
   }
 
