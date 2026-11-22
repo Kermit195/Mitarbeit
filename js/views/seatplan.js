@@ -16,11 +16,18 @@ const HA_SYM = { '+': 'HA +', o: 'HA o', '-': 'HA −' };
 
 export function renderSeatplan(main, g) {
   if (!g.students.length) { main.append(emptyStudents(g)); return; }
-  if (!g.seatplans.length) g.seatplans.push({ id: uid(), name: 'Reihen', pos: {} });
+  if (!g.seatplans.length) g.seatplans.push({ id: uid(), name: 'Reihen', pos: {}, scale: 0.75 });
   const plan = g.seatplans.find(sp => sp.id === g.activeSeat) || g.seatplans[0];
   g.activeSeat = plan.id;
   const locked = g.seatLocked !== false;
   const p = currentPeriod(g);
+  const s = Number(plan.scale) || 0.75;        // Kachelgröße dieses Sitzplans
+  const U = GRID * s, tw = TW * s, th = TH * s, board = BOARD * Math.max(0.7, s);
+
+  const sizer = h('input.size-slider', {
+    type: 'range', min: 0.5, max: 1.2, step: 0.05, value: s, 'aria-label': 'Kachelgröße',
+    onChange: e => { plan.scale = Number(e.target.value); save(); render(); },
+  });
 
   const select = h('select.plan-select', { onChange: e => { g.activeSeat = e.target.value; save(); render(); } },
     g.seatplans.map(sp => h('option', { value: sp.id, selected: sp.id === plan.id }, sp.name)));
@@ -31,6 +38,7 @@ export function renderSeatplan(main, g) {
     btn('Umbenennen', () => renamePlan(plan), 'ghost'),
     g.seatplans.length > 1 && btn('Löschen', () => deletePlan(g, plan), 'ghost'),
     !locked && btn('Neu anordnen', () => relayout(plan), 'ghost'),
+    h('label.inline.size-label', 'Größe ', sizer),
     h('span.spacer'),
     h('button.btn.lock' + (locked ? '.locked' : '.unlocked'), {
       type: 'button',
@@ -41,20 +49,21 @@ export function renderSeatplan(main, g) {
 
   const students = sortedStudents(g);
   const width = Math.max(600, (main.clientWidth || window.innerWidth) - 34); // abzüglich Innenabstand und Rahmen
-  if (placeMissing(plan, students, width)) save();
+  if (placeMissing(plan, students, width / s)) save();
 
   let maxX = width, tilesBottom = 0;
   for (const st of students) {
     const ps = plan.pos[st.id];
-    maxX = Math.max(maxX, ps.x * GRID + TW + GRID);
-    tilesBottom = Math.max(tilesBottom, ps.y * GRID + TH);
+    maxX = Math.max(maxX, ps.x * U + tw + U);
+    tilesBottom = Math.max(tilesBottom, ps.y * U + th);
   }
   // Entsperrt: Platz unter der ersten Reihe lassen, damit Kacheln nach unten gezogen werden können
-  const extra = locked ? GRID : 2 * (TH + GRID);
-  const maxY = tilesBottom + extra + BOARD;
+  const extra = locked ? U : 2 * (th + U);
+  const maxY = tilesBottom + extra + board;
   const canvas = h('div.seat-canvas' + (locked ? '.locked' : '.unlocked'),
-    { style: { width: maxX + 'px', height: maxY + 'px' } },
+    { style: { width: maxX + 'px', height: maxY + 'px', backgroundSize: `${U}px ${U}px` } },
     h('div.board', 'Tafel · Lehrkraft'));
+  canvas.style.setProperty('--s', String(s));
 
   const t = today();
   const rs = p ? redeStats(g, p) : null;
@@ -64,13 +73,13 @@ export function renderSeatplan(main, g) {
     const sc = p ? scoreOf(g, st.id, p) : null;
     const ha = g.entries.find(e => e.sid === st.id && e.cat === 'hausaufgaben' && e.date === t);
     const tile = h('div.seat' + (ds.inactive ? '.inactive' : '') + (sel.ids.has(st.id) ? '.selected' : ''),
-      { role: 'button', tabindex: 0, style: { left: ps.x * GRID + 'px', top: ps.y * GRID + 'px', width: TW + 'px', height: TH + 'px' } },
+      { role: 'button', tabindex: 0, title: studentLabel(st), style: { left: ps.x * U + 'px', top: ps.y * U + 'px', width: tw + 'px', height: th + 'px' } },
       h('div.seat-top', h('div.sname', studentLabel(st)),
         ds.absent ? h('span.tag.absent', 'fehlt') : ha && h('span.tag.ha', { title: 'Hausaufgaben heute' }, HA_SYM[ha.level] || 'HA')),
       h('div.seat-meta',
         sc && scoreBadge(g, sc),
         rs && h('span.rede', { title: 'Redebeiträge im Zeitraum' }, '💬 ' + (rs.counts[st.id] || 0))));
-    attachTile(tile, g, plan, st, locked);
+    attachTile(tile, g, plan, st, locked, U, th, board);
     canvas.append(tile);
   }
   // Gesperrt: zu breite Pläne (z. B. im Hochformat) verkleinert vollständig anzeigen
@@ -116,7 +125,7 @@ function placeMissing(plan, students, width) {
   return true;
 }
 
-function attachTile(tile, g, plan, st, locked) {
+function attachTile(tile, g, plan, st, locked, U, th, board) {
   let pid = null, sx = 0, sy = 0, ox = 0, oy = 0, moved = false, lt = null, suppress = false;
   tile.addEventListener('pointerdown', e => {
     if (e.button > 0) return;
@@ -137,7 +146,7 @@ function attachTile(tile, g, plan, st, locked) {
     }
     if (moved && !locked) {
       tile.style.left = Math.max(0, ox + dx) + 'px';
-      tile.style.top = Math.max(0, Math.min(tile.parentElement.offsetHeight - BOARD - TH, oy + dy)) + 'px';
+      tile.style.top = Math.max(0, Math.min(tile.parentElement.offsetHeight - board - th, oy + dy)) + 'px';
     }
   });
   const end = (e, cancelled) => {
@@ -148,8 +157,8 @@ function attachTile(tile, g, plan, st, locked) {
     suppress = true;
     if (locked) return;
     if (cancelled) { render(); return; }
-    const x = Math.round(tile.offsetLeft / GRID);
-    const y = Math.max(0, Math.round(tile.offsetTop / GRID));
+    const x = Math.round(tile.offsetLeft / U);
+    const y = Math.max(0, Math.round(tile.offsetTop / U));
     const old = plan.pos[st.id];
     const other = Object.entries(plan.pos).find(([sid, q]) => sid !== st.id && q.x === x && q.y === y);
     if (other && old) plan.pos[other[0]] = { x: old.x, y: old.y };
@@ -174,7 +183,7 @@ async function newPlan(g, current) {
     ok: 'Anlegen',
   });
   if (!res) return;
-  const sp = { id: uid(), name: res.name, pos: res.copy ? JSON.parse(JSON.stringify(current.pos)) : {} };
+  const sp = { id: uid(), name: res.name, pos: res.copy ? JSON.parse(JSON.stringify(current.pos)) : {}, scale: current.scale || 0.75 };
   g.seatplans.push(sp);
   g.activeSeat = sp.id;
   g.seatLocked = false;

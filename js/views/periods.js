@@ -1,12 +1,13 @@
 // Zeiträume & Noten: individuelle Zeiträume, gezählte Stunden, Notenvorschläge, Abschluss
 
 import { h, uid, today, addDays, fmtDate, fmtShort, isoDate, daysBetween, weekday } from '../util.js';
-import { save, subjCfg, sortedStudents, studentLabel, addLesson, removeLesson } from '../model.js';
+import { S, save, subjCfg, sortedStudents, studentLabel, addLesson, removeLesson } from '../model.js';
 import { go, render } from '../nav.js';
 import { btn, formDialog, confirmDialog, alertDialog, toast } from '../ui.js';
-import { periodsOf, scoreOf, hintsOf, redeStats, lessonsIn, fmtPerLesson, fmtPts } from '../grading.js';
+import { periodsOf, scoreOf, hintsOf, redeStats, lessonsIn, fmtPct, weakSek2 } from '../grading.js';
 import { pushUndo } from '../undo.js';
-import { fmtGrade, NOTE_ZERO } from './common.js';
+import { fmtGrade } from './common.js';
+import { SEK2_WARN } from '../explain.js';
 import { openWizard } from './wizard.js';
 
 export function renderPeriods(main, g, v) {
@@ -148,34 +149,36 @@ function renderDetail(main, g, v, p) {
     main.append(h('p.hint', `Der Zeitraum läuft noch bis ${fmtDate(p.end)}. Ein Abschluss ist trotzdem möglich.`));
   }
   if (sts.some(st => results[st.id] && results[st.id].legacy)) {
-    main.append(h('p.hint', 'Mit „altes System“ markierte Noten wurden vor dem Update (Start bei 3,0 ± Gewicht) bestätigt und bleiben unverändert.'));
+    main.append(h('p.hint', 'Mit „älteres System“ markierte Noten wurden vor einem Update bestätigt und bleiben unverändert.'));
   }
   main.append(lessonsCard(g, p));
 
   const hi = hintsOf(g, p);
   const rs = g.fach === 'pb' ? redeStats(g, p) : null;
+  const min = Number(S.data.settings.minLessons) || 4;
   const table = h('table.grades-table',
     h('thead', h('tr',
-      h('th', 'Name'), h('th', 'Std.'), h('th', 'Punkte'), h('th', 'P./Std.'), rs && h('th', 'Redebeitr.'),
+      h('th', 'Name'), h('th', 'gewertet'), h('th', 'Durchschnitt'), rs && h('th', 'Redebeitr.'),
       h('th', 'Vorschlag'), h('th', 'Note'), h('th', 'Hinweise'))),
     h('tbody', sts.map(st => {
       const sc = scoreOf(g, st.id, p);
       const r = results[st.id];
       const notes = hi.haeufung.filter(x => x.sid === st.id).map(x => h('span.tag.warn', `${x.n}× ${x.label}`));
       if (hi.luecken.some(x => x.sid === st.id)) notes.push(h('span.tag', 'wenig beobachtet'));
-      if (r && r.confirmed && r.legacy) notes.push(h('span.tag', 'altes System'));
+      if (sc.provisional) notes.push(h('span.tag', 'vorläufig'));
+      if (weakSek2(g, sc.grade)) notes.push(h('span.tag.warn', { title: SEK2_WARN }, '≤ 4 Punkte'));
+      if (r && r.confirmed && r.legacy) notes.push(h('span.tag', 'älteres System'));
       else if (r && r.confirmed && r.grade !== r.proposalGrade) notes.push(h('span.tag', 'abweichend'));
       return h('tr.clickable', { onClick: () => openWizard(g, p, st.id) },
         h('th', studentLabel(st)),
-        h('td', String(sc.lessons)),
-        h('td', fmtPts(sc.sum)),
-        h('td', fmtPerLesson(sc.perLesson)),
+        h('td', `${sc.graded}/${sc.lessons}`),
+        h('td', sc.avg === null ? '–' : fmtPct(Math.round(sc.avg * 10) / 10)),
         rs && h('td', `${rs.counts[st.id] || 0} (Ø ${rs.avg.toFixed(1).replace('.', ',')})`),
         h('td', fmtGrade(g, sc.grade)),
         h('td', r && r.confirmed ? h('strong', fmtGrade(g, r.grade)) : h('span.muted', 'offen')),
         h('td.notes', notes));
     })));
-  main.append(h('p.hint', `Punkte pro Stunde = Summe der Punkte ÷ anwesende Stunden. ${NOTE_ZERO}.`), h('div.table-wrap', table));
+  main.append(h('p.hint', `Durchschnitt aller gewerteten Stunden; unter ${min} gewerteten Stunden ist der Vorschlag vorläufig. Wertungsfrei: nicht anwesend, Befreiung (mit Attest bzw. innerhalb der Frist), eingeschränkte Teilnahme.`), h('div.table-wrap', table));
 
   const first = sts.find(st => !(results[st.id] && results[st.id].confirmed)) || sts[0];
   main.append(h('div.btnrow.left',

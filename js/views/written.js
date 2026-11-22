@@ -4,7 +4,7 @@ import { h, uid, today, fmtDate, fmtShort, weekday } from '../util.js';
 import { save, subjCfg, sortedStudents, studentLabel, addLesson } from '../model.js';
 import { go, render } from '../nav.js';
 import { btn, formDialog, confirmDialog, openSheet, segmented } from '../ui.js';
-import { periodsOf, currentPeriod, inRange, dayStatus, fmtPts } from '../grading.js';
+import { periodsOf, currentPeriod, inRange, dayStatus, fmtDelta } from '../grading.js';
 import { pushUndo } from '../undo.js';
 import { emptyStudents } from './common.js';
 
@@ -35,8 +35,8 @@ export function renderWritten(main, g, v) {
     segmented([['liste', 'Liste'], ['matrix', 'Übersicht']], mode, m => go({ ...v, mode: m, periodId: pid })),
     h('span.spacer'),
     btn('＋ Aufgabe anlegen', () => newTask(g), 'primary')));
-  const pts = subjCfg(g).written.points;
-  main.append(h('p.hint', `Punkte: + ${fmtPts(pts['+'])} · o ${fmtPts(pts.o)} · − ${fmtPts(pts['-'])} · nicht abgegeben ${fmtPts(pts.na)} · nicht anwesend wertungsfrei (wird bei Abwesenheit automatisch gesetzt).`));
+  const pct = subjCfg(g).written.pct;
+  main.append(h('p.hint', `Wirkung auf den Stundenwert des Aufgabendatums: + ${fmtDelta(pct['+'])} · o ${fmtDelta(pct.o)} · − ${fmtDelta(pct['-'])} · nicht abgegeben ${fmtDelta(pct.na)} · nicht anwesend wertungsfrei (wird bei Abwesenheit automatisch gesetzt).`));
 
   const tasks = g.tasks.filter(t => !p || inRange(t.date, p)).sort((a, b) => b.date.localeCompare(a.date));
   if (!tasks.length) { main.append(h('p.empty', 'Noch keine schriftlichen Aufgaben in diesem Zeitraum.')); return; }

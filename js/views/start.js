@@ -5,7 +5,7 @@ import { S, groupsOfClass, getClass } from '../model.js';
 import { go, hooks } from '../nav.js';
 import { topbar, btn } from '../ui.js';
 import { SUBJECT_LABELS } from '../defaults.js';
-import { openExcuses } from '../grading.js';
+import { exemptionsMissingAttest } from '../grading.js';
 import { swState, applyUpdate } from '../sw-client.js';
 import { createBackupFlow } from './backupui.js';
 
@@ -41,9 +41,9 @@ export function renderStart(root) {
     }
   }
   for (const g of d.groups) {
-    const n = openExcuses(g).filter(x => x.overdue).length;
+    const n = exemptionsMissingAttest(g).filter(x => x.overdue).length;
     if (n) {
-      banners.append(banner('info', `${getClass(g.classId)?.name} Sport: ${plural(n, 'Entschuldigung', 'Entschuldigungen')} überfällig.`,
+      banners.append(banner('info', `${getClass(g.classId)?.name} Sport: ${plural(n, 'Befreiung', 'Befreiungen')} ohne Attest – Stunden zählen als unentschuldigt (0 %).`,
         [btn('Ansehen', () => go({ name: 'group', groupId: g.id, tab: 'erfassen' }), 'ghost')]));
     }
   }

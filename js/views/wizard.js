@@ -4,9 +4,10 @@ import { h } from '../util.js';
 import { save, subjCfg, isSek2, sortedStudents, studentLabel, findStudent } from '../model.js';
 import { render } from '../nav.js';
 import { openSheet, btn, confirmDialog, toast } from '../ui.js';
-import { scoreOf, ensureRec, fmtPerLesson, fmtPts } from '../grading.js';
+import { scoreOf, ensureRec, fmtPct, weakSek2 } from '../grading.js';
 import { draftFeedback } from '../feedback.js';
-import { fmtGrade, studentSummary, NOTE_ZERO } from './common.js';
+import { evidence, explanationBlock, SEK2_WARN } from '../explain.js';
+import { fmtGrade, studentSummary } from './common.js';
 import { presentFeedback, presentSelf } from './present.js';
 
 export function openWizard(g, p, startSid) {
@@ -35,10 +36,12 @@ export function openWizard(g, p, startSid) {
     let nOpen = false;
     const proposal = h('section.card.proposal',
       h('div.prop-main',
-        h('div', h('small', 'Notenvorschlag'), h('div.big', `${fmtPerLesson(sc.perLesson)} P./Std. → ${fmtGrade(g, sc.grade)}`)),
-        h('div.muted.small', `${fmtPts(sc.sum)} Punkte in ${sc.lessons} anwesenden Stunden · ${sc.n} bewertende Einträge · ${NOTE_ZERO}`),
+        h('div', h('small', sc.provisional ? 'Notenvorschlag (vorläufig)' : 'Notenvorschlag'),
+          h('div.big', sc.avg === null ? 'keine gewertete Stunde' : `${fmtPct(Math.round(sc.avg * 10) / 10)} → ${fmtGrade(g, sc.grade)}`)),
+        h('div.muted.small', `Durchschnitt aus ${sc.graded} gewerteten von ${sc.lessons} gezählten Stunden · ${sc.n} bewertende Einträge`),
+        weakSek2(g, sc.grade) && h('p.warnbox', SEK2_WARN),
         r.confirmed && h('span.tag.ok', `bestätigt: ${fmtGrade(g, r.grade)}`),
-        r.confirmed && r.legacy && h('p.hint', 'Diese Note wurde vor dem Update im alten System bestätigt. Erneutes Bestätigen übernimmt den neuen Vorschlag als Vergleichswert.')),
+        r.confirmed && r.legacy && h('p.hint', 'Diese Note wurde vor einem Update im älteren Bewertungssystem bestätigt. Erneutes Bestätigen übernimmt den neuen Vorschlag als Vergleichswert.')),
       btn('Nachweis anzeigen', e => {
         nOpen = !nOpen;
         e.currentTarget.textContent = nOpen ? 'Nachweis ausblenden' : 'Nachweis anzeigen';
@@ -57,7 +60,11 @@ export function openWizard(g, p, startSid) {
         b.classList.toggle('proposal', String(sc.grade) === b.dataset.v);
       }
       reasonWrap.hidden = grade === sc.grade;
+      explainBox.replaceChildren(grade === null ? h('p.muted', 'Keine Note.') : explanationBlock(g, grade, belege()));
     };
+    // Belege: bei bestätigten Noten der gespeicherte Stand, sonst aktuell berechnet
+    const belege = () => (r.confirmed && r.belege ? r.belege : evidence(g, sid, p));
+    const explainBox = h('div');
     for (const n of [...values, null]) {
       gradeBtns.append(h('button.gbtn', { type: 'button', dataset: { v: String(n) }, onClick: () => { grade = n; updateGrades(); } },
         n === null ? 'keine Note' : String(n)));
@@ -121,13 +128,11 @@ export function openWizard(g, p, startSid) {
     const confirmAndNext = () => {
       r.grade = grade;
       r.reason = grade !== sc.grade ? reason.value.trim() : '';
-      r.proposalPerLesson = sc.perLesson;
+      r.proposalPct = sc.avg;
       r.proposalGrade = sc.grade;
-      r.points = sc.sum;
-      r.lessons = sc.lessons;
-      delete r.legacy;
-      delete r.proposal;
-      delete r.proposalRounded;
+      r.graded = sc.graded;
+      r.belege = evidence(g, sid, p);
+      for (const k of ['legacy', 'proposal', 'proposalRounded', 'proposalPerLesson', 'points', 'lessons']) delete r[k];
       r.confirmed = true;
       r.confirmedAt = Date.now();
       save();
@@ -143,14 +148,16 @@ export function openWizard(g, p, startSid) {
       proposal,
       nachweis,
       h('section', h('h3', sek2 ? 'Notenpunkte' : 'Note'), gradeBtns, reasonWrap),
+      h('section', h('h3', 'Notenbegründung'), h('p.muted.small', 'Passt sich der gewählten Note an. Die Belege werden beim Bestätigen gespeichert.'), explainBox),
       h('section',
-        h('div.sec-head', h('h3', 'Feedback'), btn('Entwurf neu erzeugen', regen, 'ghost small')),
+        h('div.sec-head', h('h3', 'Persönliche Rückmeldung'), btn('Entwurf neu erzeugen', regen, 'ghost small')),
         h('p.muted.small', 'Entwurf aus Satzbausteinen – frei bearbeitbar. Wird mit der Note gespeichert.'),
         fbBox),
       assess,
       h('div.wiz-foot',
         btn('‹ Vorherige', () => { idx = Math.max(0, idx - 1); show(); }, 'ghost', { disabled: idx === 0 }),
-        btn('Präsentieren', () => presentFeedback(st.vorname, cfg, r.feedback), 'ghost'),
+        btn('Präsentieren', () => presentFeedback(st.vorname, cfg, r.feedback,
+          grade === null ? null : explanationBlock(g, grade, belege(), { forStudent: true })), 'ghost'),
         h('span.spacer'),
         btn(r.confirmed ? 'Speichern & weiter ›' : 'Bestätigen & weiter ›', confirmAndNext, 'primary big')),
     ]);

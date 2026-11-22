@@ -1,12 +1,14 @@
 // Ansicht einer Lerngruppe (Klasse + Fach) mit Reitern
 
 import { h, today, fmtShort } from '../util.js';
-import { S, save, getGroup, getClass, groupsOfClass, sortedStudents, studentLabel } from '../model.js';
+import { S, save, getGroup, getClass, groupsOfClass, sortedStudents, studentLabel, isSek2, subjCfg } from '../model.js';
+import { scaleView } from '../explain.js';
+import { presentScale } from './present.js';
 import { go, render } from '../nav.js';
 import { topbar, toast } from '../ui.js';
 import { SUBJECT_LABELS, SUBJECT_NAMES } from '../defaults.js';
 import { canUndo, undo, lastUndoLabel } from '../undo.js';
-import { currentPeriod, scoreOf, dayStatus } from '../grading.js';
+import { currentPeriod, scoreOf, dayStatus, exemptionInfo, lessonValue, fmtPct } from '../grading.js';
 import { sel, resetSel, infoBar, selectionBar, scoreBadge, pressable, emptyStudents } from './common.js';
 import { openRateSheet, tapStudent, longStudent } from './rate.js';
 import { renderSeatplan } from './seatplan.js';
@@ -46,11 +48,15 @@ export function renderGroup(root, v) {
     onClick: () => { const l = undo(); if (l) { toast('Rückgängig gemacht: ' + l); render(); } },
   }, '↶ Rückgängig');
 
+  const scaleBtn = h('button.btn.ghost', {
+    type: 'button', title: 'Bewertungsmaßstab für die Klasse zeigen (ohne Schülerdaten)',
+    onClick: () => presentScale(scaleView(g.fach, isSek2(g))),
+  }, 'Maßstab');
   root.append(h('div.sticky-head',
     topbar({
       left: h('button.btn.ghost.back', { type: 'button', onClick: () => go({ name: 'start' }) }, '‹ Klassen'),
       center: h('div.tb-center-row', h('div.tb-title', cls.name), subj),
-      right: undoBtn,
+      right: [scaleBtn, undoBtn],
     }),
     h('nav.tabs.' + g.fach, tabs.map(([id, label]) => h('button.tab' + (id === tab ? '.active' : ''), {
       type: 'button',
@@ -80,11 +86,17 @@ function renderSportList(main, g) {
     const sc = p ? scoreOf(g, st.id, p) : null;
     const tags = [];
     if (ds.absent) tags.push(h('span.tag.absent', 'nicht anwesend'));
-    if (ds.exempt) tags.push(h('span.tag.exempt', 'befreit bis ' + fmtShort(ds.exempt.extra.bis)));
+    if (ds.exempt) {
+      const info = exemptionInfo(g, ds.exempt);
+      tags.push(h('span.tag.exempt', `befreit bis ${fmtShort(ds.exempt.extra.bis)}` + (info.excused ? '' : info.overdue ? ' · unentschuldigt' : ' · Attest fehlt')));
+    }
     if (ds.limited) tags.push(h('span.tag.limited', 'eingeschränkt'));
+    const lv = p && g.lessons.includes(t) ? lessonValue(g, st.id, t) : null;
+    if (lv && lv.graded && (lv.note || lv.value !== Number(subjCfg(g).start))) tags.push(h('span.tag', { title: 'Stundenwert heute' }, `heute ${fmtPct(lv.value)}${lv.note ? ' · ' + lv.note : ''}`));
     const card = h('div.scard' + (ds.inactive ? '.inactive' : '') + (sel.ids.has(st.id) ? '.selected' : ''),
       { role: 'button', tabindex: 0, 'aria-label': studentLabel(st) },
-      h('div.scard-top', h('span.sname', studentLabel(st)), sc && scoreBadge(g, sc)),
+      h('div.scard-top', h('span.sname', studentLabel(st))),
+      sc && h('div.scard-score', scoreBadge(g, sc)),
       h('div.scard-status', tags));
     pressable(card, () => tapStudent(g, st.id), () => longStudent(g, st.id));
     grid.append(card);

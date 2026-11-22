@@ -33,11 +33,14 @@ function openPresent() {
   return { ov, inner, close };
 }
 
-export function presentFeedback(name, cfg, fb) {
+// Feedback einer Person: Notenbegründung (drei Ebenen, nächstbessere Note) und persönliche Rückmeldung
+export function presentFeedback(name, cfg, fb, explanation) {
   const { inner } = openPresent();
   const kind = id => (id.endsWith('gut') ? 'good' : id.endsWith('arbeiten') ? 'work' : 'tip');
   const sec = s => h('div.p-sec.' + kind(s.id), h('h3', s.title), h('p', fb[s.id] || ''));
   const parts = [h('h1', `Feedback für ${name}`)];
+  if (explanation) parts.push(h('section.p-area.p-explain', explanation));
+  parts.push(h('h2.p-heading', 'Persönliche Rückmeldung'));
   if (cfg.areas) {
     for (const a of cfg.areas) {
       const secs = cfg.feedbackSections.filter(s => s.area === a.id);
@@ -47,6 +50,12 @@ export function presentFeedback(name, cfg, fb) {
     parts.push(h('div.p-stack', cfg.feedbackSections.map(sec)));
   }
   inner.append(...parts);
+}
+
+// Bewertungsmaßstab für die Klasse – ohne Schülerdaten
+export function presentScale(view) {
+  const { inner } = openPresent();
+  inner.append(view);
 }
 
 export function presentSelf(name, cfg, onDone) {

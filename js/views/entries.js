@@ -4,7 +4,7 @@ import { h, fmtDate, fmtShort, weekday } from '../util.js';
 import { save, subjCfg, sortedStudents, studentLabel, findStudent, addLesson } from '../model.js';
 import { go, render } from '../nav.js';
 import { formDialog, confirmDialog } from '../ui.js';
-import { periodsOf, currentPeriod, inRange, catOf, entryLabel, entryPoints, isRating, fmtPts } from '../grading.js';
+import { periodsOf, currentPeriod, inRange, catOf, entryLabel, entryDelta, levelOf, fmtPct, fmtDelta, exemptionInfo } from '../grading.js';
 import { pushUndo } from '../undo.js';
 import { studentSummary } from './common.js';
 
@@ -45,18 +45,25 @@ export function renderEntries(main, g, v) {
 }
 
 function extraText(g, e) {
-  if (e.cat === 'befreit' && e.extra) return ` · bis ${fmtDate(e.extra.bis)}, Attest: ${e.extra.attest ? 'ja' : 'nein'}`;
-  if (e.cat === 'abwesend' && g.fach === 'sport' && e.extra) return ` · Entschuldigung: ${e.extra.excuse}`;
+  if (e.cat === 'befreit' && e.extra) {
+    const info = exemptionInfo(g, e);
+    const att = e.extra.attest ? 'ja' : e.extra.attestLater ? 'nachgereicht' : info.overdue ? 'nein – unentschuldigt (0 %)' : 'fehlt noch';
+    return ` · bis ${fmtDate(e.extra.bis)}, Attest: ${att}`;
+  }
   return '';
 }
 
 function entryRow(g, e, showName) {
   const cfg = subjCfg(g);
-  const pts = entryPoints(cfg, e);
-  const rating = isRating(cfg, e);
-  const kind = pts > 0 ? 'plus' : pts < 0 ? 'minus' : 'neutral';
+  const c = catOf(cfg, e.cat);
+  const d = entryDelta(cfg, e);
+  const kind = e.sign > 0 ? 'plus' : e.sign < 0 ? 'minus' : 'neutral';
+  const sym = !c || c.neutral || c.kind === 'passive' ? '•'
+    : c.kind === 'zero' ? '0 %'
+      : c.kind === 'base' || c.kind === 'protocol' ? fmtPct(Number((levelOf(cfg, e) || {}).pct || 0))
+        : fmtDelta(d);
   return h('button.entry', { type: 'button', onClick: () => editEntry(g, e) },
-    h('span.e-sign.' + kind, rating ? fmtPts(pts) : '•'),
+    h('span.e-sign.' + kind, sym),
     h('span.e-main',
       showName && h('strong', studentLabel(findStudent(g, e.sid)) + ': '),
       entryLabel(cfg, e), extraText(g, e),
@@ -71,10 +78,13 @@ async function editEntry(g, e) {
     { name: 'date', label: 'Datum', type: 'date', value: e.date, required: true },
     { name: 'stunde', label: 'Stunde', type: 'number', min: 0, max: 12, value: e.stunde || '' },
   ];
-  if (c && !c.levels && Number.isFinite(c.plus) && Number.isFinite(c.minus)) {
-    fields.push({ name: 'sign', label: 'Wertung', type: 'select', options: [['1', `${fmtPts(c.plus)} Punkte`], ['-1', `${fmtPts(c.minus)} Punkte`]], value: String(e.sign) });
+  if (c && !c.levels && !c.kind && Number.isFinite(c.plus) && Number.isFinite(c.minus)) {
+    fields.push({ name: 'sign', label: 'Wertung', type: 'select', options: [['1', fmtDelta(c.plus)], ['-1', fmtDelta(c.minus)]], value: String(e.sign) });
   }
-  if (c && c.levels) fields.push({ name: 'level', label: 'Stufe', type: 'select', options: c.levels.map(l => [l.id, `${l.label} (${fmtPts(Number(l.pts))})`]), value: e.level });
+  if (c && c.levels) {
+    const abs = c.kind === 'base' || c.kind === 'protocol';
+    fields.push({ name: 'level', label: 'Stufe', type: 'select', options: c.levels.map(l => [l.id, `${l.label} (${abs ? fmtPct(Number(l.pct)) : fmtDelta(Number(l.pct))})`]), value: e.level });
+  }
   if (c && c.subs && c.subs.length) {
     const subs = c.subs.includes(e.sub) || !e.sub ? c.subs : [...c.subs, e.sub];
     fields.push({ name: 'sub', label: 'Unterkategorie', type: 'select', options: [['', '– ohne –'], ...subs.map(s => [s, s])], value: e.sub || '' });
@@ -82,9 +92,7 @@ async function editEntry(g, e) {
   if (e.cat === 'befreit') {
     fields.push({ name: 'bis', label: 'befreit bis', type: 'date', value: e.extra?.bis, required: true });
     fields.push({ name: 'attest', label: 'Attest liegt vor', type: 'checkbox', value: !!e.extra?.attest });
-  }
-  if (e.cat === 'abwesend' && g.fach === 'sport') {
-    fields.push({ name: 'excuse', label: 'Entschuldigung', type: 'select', options: [['offen', 'offen'], ['liegt vor', 'liegt vor'], ['nicht nachgereicht', 'nicht nachgereicht']], value: e.extra?.excuse || 'offen' });
+    fields.push({ name: 'attestLater', label: 'Attest nachgereicht (Stunden wieder wertungsfrei)', type: 'checkbox', value: !!e.extra?.attestLater });
   }
   fields.push({ name: 'note', label: 'Bemerkung', type: 'textarea', rows: 3, value: e.note || '' });
 
@@ -110,12 +118,12 @@ async function editEntry(g, e) {
   if ('level' in res) {
     e.level = res.level;
     const l = c.levels.find(x => x.id === res.level);
-    e.sign = l ? Math.sign(Number(l.pts)) : 0;
+    const v = l ? Number(l.pct) : 0;
+    e.sign = c.kind === 'base' ? Math.sign(v - Number(cfg.start)) : c.kind === 'protocol' ? 0 : Math.sign(v);
   }
   addLesson(g, e.date);
   if ('sub' in res) { if (res.sub) e.sub = res.sub; else delete e.sub; }
-  if (e.cat === 'befreit') e.extra = { ...e.extra, bis: res.bis, attest: res.attest };
-  if ('excuse' in res) e.extra = { ...e.extra, excuse: res.excuse };
+  if (e.cat === 'befreit') e.extra = { ...e.extra, bis: res.bis, attest: res.attest, attestLater: res.attestLater };
   if (res.note) e.note = res.note; else delete e.note;
   save();
   render();

@@ -10,10 +10,11 @@ import { uid, today, addDays, daysBetween, currentLesson } from './util.js';
 
 // Bei Änderungen am Datenformat: SCHEMA_VERSION erhöhen und unten eine Migration ergänzen.
 // Vor jeder Migration bleibt der alte verschlüsselte Stand als „pre_migration_s<n>“ erhalten.
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 const MIGRATIONS = {
   2: migrateTo2,
+  3: migrateTo3,
 };
 
 // S.meta: Schlüsselinformationen (v2) oder – vor dem Update – die alten Passwort-Metadaten
@@ -208,6 +209,18 @@ export async function completeLegacyUpgrade(pin, backupPassword) {
 
 export async function hasLegacyCopy() { return !!(await db.get('legacy_v1')); }
 
+// Kopie vor einer Schema-Migration (z. B. „pre_migration_s2“ = Stand von Version 2), mit dem aktuellen Datenschlüssel verschlüsselt
+export async function preMigrationVersions() {
+  const out = [];
+  for (let n = 2; n < SCHEMA_VERSION; n++) if (await db.get(`pre_migration_s${n}`)) out.push(n);
+  return out;
+}
+
+export async function readPreMigration(n) {
+  const rec = await db.get(`pre_migration_s${n}`);
+  return migrate(await decryptJSON(S.key, rec.iv, rec.ct));
+}
+
 // Stand von vor dem Update lesen (altes App-Passwort nötig); Ergebnis bereits migriert, null = falsches Passwort
 export async function readLegacyCopy(password) {
   const l = await db.get('legacy_v1');
@@ -301,6 +314,90 @@ function migrateTo2(d) {
   }
 }
 
+// Version 2 → 3: Stundenwert in Prozent statt Punktekonto (Zuordnungstabelle siehe README)
+function migrateTo3(d) {
+  const st = d.settings;
+  const oldSport = (st.subjects && st.subjects.sport) || {};
+  const oldPb = (st.subjects && st.subjects.pb) || {};
+  const sport = sportConfig();
+  const pb = pbConfig();
+  carryConfig3(sport, oldSport, 4);
+  carryConfig3(pb, oldPb, 5);
+  if (oldPb.written && Array.isArray(oldPb.written.arts) && oldPb.written.arts.length) pb.written.arts = oldPb.written.arts.slice();
+  st.subjects = { sport, pb };
+  delete st.rounding;
+
+  for (const g of d.groups) {
+    for (const e of g.entries) {
+      if (e.cat === 'abwesend' && e.extra) { delete e.extra.excuse; if (!Object.keys(e.extra).length) delete e.extra; }
+    }
+    if (g.fach === 'sport') g.entries = g.entries.flatMap(e => mapSportEntry(e));
+    for (const sp of g.seatplans || []) if (!sp.scale) sp.scale = 0.75;
+    for (const rec of Object.values(g.closed || {})) {
+      for (const r of Object.values(rec.results || {})) if (r.confirmed && !r.legacy) r.legacy = 'v2';
+    }
+  }
+}
+
+const note = (e, text) => {
+  const out = { ...e, cat: 'notiz', sign: 0, note: e.note ? `${text} – ${e.note}` : text };
+  delete out.level; delete out.sub;
+  return out;
+};
+const as = (e, cat, level, sign) => {
+  const out = { ...e, cat, sign };
+  if (level) out.level = level; else delete out.level;
+  return out;
+};
+
+function mapSportEntry(e) {
+  switch (e.cat) {
+    case 'respekt': return [e.sign > 0 ? as(e, 'fair', null, 1) : as(e, 'unfair', 'n', -1)];
+    case 'einsatz': return [e.sign > 0 ? as(e, 'einsatz', null, 1) : as(e, 'einsatzstufe', 'befr', -1)];
+    case 'passiv':
+      if (e.level === 'p2' || e.level === 'p1') return [as(e, 'beteiligung', null, 1)];
+      if (e.level === 'm1' || e.level === 'm2') return [as(e, 'einsatzstufe', 'befr', -1)];
+      return [note(e, 'Passive Mitarbeit 0 (Version 2)')];
+    case 'zusammenkommen':
+    case 'aufbau':
+      if (e.level) return [e];
+      return [e.sign > 0 ? as(e, e.cat, 'plus', 1) : as(e, e.cat, 'laenger', -1)];
+    case 'material': {
+      const out = e.sub === 'Fingernägel zu lang' ? as(e, 'naegel', null, -1)
+        : e.sub === 'Schmuck nicht abgelegt' ? as(e, 'schmuck', null, -1)
+          : as(e, 'vergessen', null, -1);
+      delete out.sub;
+      return [out];
+    }
+    case 'entschuldigung': return [note(e, 'Entschuldigung nicht nachgereicht (Version 2)')];
+    case 'befreit': {
+      // Alte Befreiungen ohne Attest gelten als „Attest nachgereicht“ (sonst rückwirkend 0 %)
+      const ex = { ...(e.extra || {}) };
+      if (!ex.attest) ex.attestLater = true;
+      return [{ ...e, extra: ex }];
+    }
+    default: return [e];
+  }
+}
+
+function carryConfig3(n, o, step) {
+  if (o.thresholds) for (const k of Object.keys(n.thresholds)) if (Number.isFinite(o.thresholds[k])) n.thresholds[k] = o.thresholds[k];
+  if (Number.isFinite(o.periodWeeks)) n.periodWeeks = o.periodWeeks;
+  for (const oc of o.cats || []) {
+    const nc = n.cats.find(c => c.id === oc.id);
+    if (nc) { if (oc.hidden && nc.kind !== 'notiz') nc.hidden = true; continue; }
+    if (oc.custom) {
+      n.cats.push({
+        id: oc.id, label: oc.label, section: n.sections[2] ? n.sections[2].id : n.sections[1].id, custom: true, hidden: !!oc.hidden,
+        plus: Number.isFinite(oc.plus) || oc.plus === true ? step : undefined,
+        minus: Number.isFinite(oc.minus) || oc.minus === true ? -step : undefined,
+        subs: oc.subs || [], hint: oc.hint || '', fb: oc.fb || {},
+      });
+    }
+  }
+  if (o.fbGeneric) for (const k of Object.keys(n.fbGeneric)) if (typeof o.fbGeneric[k] === 'string') n.fbGeneric[k] = o.fbGeneric[k];
+}
+
 function carryConfig(n, o) {
   if (o.thresholds) for (const k of Object.keys(n.thresholds)) if (Number.isFinite(o.thresholds[k])) n.thresholds[k] = o.thresholds[k];
   for (const oc of o.cats || []) {
@@ -335,7 +432,7 @@ export function newData() {
 }
 
 export function newGroup(classId, fach) {
-  const plan = { id: uid(), name: 'Reihen', pos: {} };
+  const plan = { id: uid(), name: 'Reihen', pos: {}, scale: 0.75 };
   return {
     id: uid(), classId, fach,
     students: [],
@@ -395,11 +492,18 @@ const isAbsent = (g, sid, date) => g.entries.some(e => e.sid === sid && e.cat ==
 
 // Ergebnis: { added: [...], skipped: [sid …] } (skipped = an diesem Tag nicht anwesend)
 export function addEntries(g, sids, o) {
-  const date = today();
   const stunde = currentLesson(S.data.settings.bell);
   const ts = Date.now();
-  const cat = subjCfg(g).cats.find(c => c.id === o.cat);
+  const cfg = subjCfg(g);
+  const cat = cfg.cats.find(c => c.id === o.cat);
   const level = cat && cat.levels ? cat.levels.find(l => l.id === o.level) : null;
+  // Vorzeichen für Anzeige und Häufungshinweis
+  const sign = !cat ? (o.sign || 0)
+    : cat.kind === 'base' && level ? Math.sign(Number(level.pct) - Number(cfg.start))
+      : cat.kind === 'zero' ? -1
+        : cat.kind === 'protocol' || cat.kind === 'passive' || cat.neutral ? 0
+          : level ? Math.sign(Number(level.pct)) : (o.sign || 0);
+  const date = o.date || today();
   const added = [], skipped = [];
   addLesson(g, date);
   for (const sid of sids) {
@@ -413,12 +517,15 @@ export function addEntries(g, sids, o) {
       if (isAbsent(g, sid, date)) { skipped.push(sid); continue; }
       g.entries = g.entries.filter(e => !(e.sid === sid && e.cat === o.cat && e.date === date));
     }
-    const e = { id: uid(), sid, cat: o.cat, sign: level ? Math.sign(level.pts) : (o.sign || 0), date, stunde, ts };
+    // Pro Tag nur eine Einsatz-Stufe, ein Protokoll, ein „passive Aufgabe“
+    if (cat && (cat.kind === 'base' || cat.kind === 'protocol' || cat.kind === 'passive')) {
+      g.entries = g.entries.filter(e => !(e.sid === sid && e.cat === o.cat && e.date === date));
+    }
+    const e = { id: uid(), sid, cat: o.cat, sign, date, stunde: o.date ? 0 : stunde, ts };
     if (o.level) e.level = o.level;
     if (o.sub) e.sub = o.sub;
     if (o.note) e.note = o.note;
     if (o.extra) e.extra = { ...o.extra };
-    if (o.cat === 'abwesend' && g.fach === 'sport') e.extra = { excuse: 'offen' };
     g.entries.push(e);
     added.push(e);
   }

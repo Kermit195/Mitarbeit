@@ -1,0 +1,8 @@
+body { font: 16px/1.4 -apple-system, system-ui, sans-serif; margin: 24px; color: #1b2430; background: #f3f5f7; }
+#summary { font-weight: 700; font-size: 1.2rem; margin: 12px 0; }
+#summary.ok { color: #1c8a4c; }
+#summary.fail { color: #c0392b; }
+li { margin: 4px 0; }
+li.ok::marker { color: #1c8a4c; }
+li.fail { color: #c0392b; font-weight: 600; }
+code { background: #e6e9ee; padding: 0 4px; border-radius: 4px; }

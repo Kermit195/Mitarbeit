@@ -3,12 +3,16 @@
 import { h, uid, fmtTimestamp } from '../util.js';
 import {
   S, save, flush, addClass, newGroup, groupsOfClass, resetGroup, wipeAll, SCHEMA_VERSION,
-  changePin, changeBackupPassword, hasLegacyCopy, readLegacyCopy, replaceData,
+  changePin, changeBackupPassword, hasLegacyCopy, readLegacyCopy, replaceData, preMigrationVersions, readPreMigration,
 } from '../model.js';
 import { go, render } from '../nav.js';
 import { topbar, btn, formDialog, confirmDialog, alertDialog, toast } from '../ui.js';
-import { SUBJECT_NAMES, SUBJECT_ORDER, FB_LABELS, SYSTEM_CATS, sportConfig, pbConfig, deriveSek2 } from '../defaults.js';
-import { fmtPts } from '../grading.js';
+import {
+  SUBJECT_NAMES, SUBJECT_ORDER, FB_LABELS, SYSTEM_CATS, GRADE_WORDS, sportConfig, pbConfig, defaultKeys, defaultOfficial,
+} from '../defaults.js';
+import { fmtPct, fmtDelta } from '../grading.js';
+import { scaleView } from '../explain.js';
+import { presentScale } from './present.js';
 import { weakPin } from './pinpad.js';
 import { swState, checkForUpdate, applyUpdate } from '../sw-client.js';
 import { clearUndo } from '../undo.js';
@@ -56,8 +60,9 @@ export function renderSettings(root) {
   main.append(
     section('Sicherung', backupSection()),
     section('Klassen und Fächer', classesSection()),
-    section('Fach Sport: Punkte, Notenschlüssel, Schwellen, Feedback', subjectSection('sport')),
-    section('Fach Politische Bildung: Punkte, Notenschlüssel, Schwellen, Feedback', subjectSection('pb')),
+    section('Notenschlüssel und amtliche Definitionen', keysSection()),
+    section('Fach Sport: Startwert, Stufen, Einträge, Beschreibungen', subjectSection('sport')),
+    section('Fach Politische Bildung: Startwert, Einträge, Beschreibungen', subjectSection('pb')),
     section('Allgemein: Sperre, Sicherung, Klingelzeiten', generalSection()),
     section('PIN und Sicherungspasswort', securitySection()),
     section('Schuljahr abschließen', yearEndSection()),
@@ -157,24 +162,31 @@ function subjectSection(fach) {
   const cfg = S.data.settings.subjects[fach];
   const th = cfg.thresholds;
   const parts = [];
+  const pct = (v, set, attrs = {}) => numInput(v, x => set(Math.round(x * 10) / 10), { step: 1, ...attrs });
 
-  // Notenschlüssel
-  parts.push(h('h3', 'Notenschlüssel (Punkte pro anwesende Stunde)'));
-  parts.push(h('p.muted', 'Fester Schlüssel, nicht relativ zur Klasse. Angegeben ist jeweils die Untergrenze („ab“). Ohne Einträge ergeben sich 0 Punkte.'));
-  parts.push(keyEditor(cfg));
+  parts.push(h('div.btnrow.left', btn('Bewertungsmaßstab anzeigen (Sek I)', () => presentScale(scaleView(fach, false)), 'ghost'),
+    btn('Bewertungsmaßstab anzeigen (Sek II)', () => presentScale(scaleView(fach, true)), 'ghost')));
+
+  parts.push(h('h3', 'Startwert der Stunde'));
+  if (fach === 'sport') {
+    parts.push(field('Startwert jeder gewerteten Stunde („gut“) in %', pct(cfg.start, v => { cfg.start = v; })));
+    parts.push(field('Höchstwert mit Protokoll bei vergessenen Sportsachen / Fingernägeln in %', pct(cfg.protocolCap, v => { cfg.protocolCap = v; })));
+  } else {
+    parts.push(h('div.points-row',
+      field('Sek I (Note 3) in %', pct(cfg.start.sek1, v => { cfg.start.sek1 = v; })),
+      field('Sek II (Note 3) in %', pct(cfg.start.sek2, v => { cfg.start.sek2 = v; }))));
+  }
 
   parts.push(h('h3', 'Schwellen und Zeiträume'));
   parts.push(field('Häufungshinweis ab dem … gleichen Minus-Eintrag im Zeitraum', numInput(th.haeufung, v => { th.haeufung = Math.max(2, Math.round(v)); }, { min: 2, max: 20 })));
   parts.push(field('Beobachtungslücke: weniger als … bewertende Einträge im Zeitraum', numInput(th.luecke, v => { th.luecke = Math.max(1, Math.round(v)); }, { min: 1, max: 50 })));
   parts.push(field('Vorgeschlagene Dauer neuer Zeiträume (Wochen)', numInput(cfg.periodWeeks, v => { cfg.periodWeeks = Math.min(30, Math.max(1, Math.round(v))); }, { min: 1, max: 30 })));
-  if (fach === 'sport') {
-    parts.push(field('Frist für Entschuldigungen (Tage)', numInput(th.excuseDays, v => { th.excuseDays = Math.max(1, Math.round(v)); }, { min: 1, max: 60 })));
-  } else {
-    parts.push(h('h3', 'Schriftliche Aufgaben: Punkte'));
-    const wp = cfg.written.points;
+  if (fach === 'pb') {
+    parts.push(h('h3', 'Schriftliche Aufgaben: Wirkung in %'));
+    const wp = cfg.written.pct;
     parts.push(h('div.points-row',
       [['+', '+'], ['o', 'o'], ['-', '−'], ['na', 'nicht abgegeben']].map(([k, label]) =>
-        field(label, numInput(wp[k], v => { wp[k] = Math.round(v * 100) / 100; }, { step: 1 })))));
+        field(label, pct(wp[k], v => { wp[k] = v; })))));
     parts.push(h('p.muted.small', '„Nicht anwesend“ ist immer wertungsfrei.'));
     parts.push(field('Arten schriftlicher Aufgaben (eine pro Zeile)', textArea(cfg.written.arts.join('\n'), v => {
       const arts = v.split('\n').map(s => s.trim()).filter(Boolean);
@@ -182,15 +194,28 @@ function subjectSection(fach) {
     }, 4)));
   }
 
-  parts.push(h('h3', 'Kategorien und Punkte'));
-  parts.push(h('p.muted', 'Punkte gelten für Sek I und Sek II gleich – nur der Notenschlüssel unterscheidet sich. Änderungen wirken auf alle Zeiträume, deren Noten noch nicht bestätigt sind.'));
-  for (const c of cfg.cats) parts.push(catEditor(fach, cfg, c));
+  parts.push(h('h3', 'Kategorien, Stufen und Wirkung in %'));
+  parts.push(h('p.muted', 'Zu- und Abschläge gelten für Sek I und Sek II gleich. Änderungen wirken auf alle Zeiträume, deren Noten noch nicht bestätigt sind.'));
+  for (const c of cfg.cats) if (c.kind !== 'notiz') parts.push(catEditor(fach, cfg, c));
   parts.push(h('div.btnrow.left', btn('＋ Kategorie hinzufügen', () => {
     const sec = cfg.sections.find(s => s.id !== 'neutral');
-    cfg.cats.push({ id: 'c' + uid(), label: 'Neue Kategorie', section: sec.id, plus: 1, minus: -1, custom: true, subs: [], fb: fach === 'pb' ? { area: 'beteiligung' } : {} });
+    const step = fach === 'sport' ? 4 : 5;
+    cfg.cats.push({ id: 'c' + uid(), label: 'Neue Kategorie', section: sec.id, plus: step, minus: -step, custom: true, subs: [], fb: fach === 'pb' ? { area: 'beteiligung' } : {} });
     save();
     render();
   }, 'ghost')));
+
+  parts.push(h('h3', 'Fachliche Notenbeschreibungen'));
+  parts.push(h('p.muted', 'Erscheinen in der Notenbegründung („fachliche Beschreibung“ und „So erreichst du die nächstbessere Note“) und im Bewertungsmaßstab.'));
+  if (fach === 'sport') {
+    for (const n of [1, 2, 3, 4, 5, 6]) parts.push(field(`Note ${n} (${GRADE_WORDS[n]})`, textArea(cfg.gradeDesc[n], v => { cfg.gradeDesc[n] = v; }, 3)));
+  } else {
+    for (const a of cfg.areas) {
+      const d = cfg.gradeDesc[a.id] || (cfg.gradeDesc[a.id] = {});
+      parts.push(h('details.cat-edit', h('summary', h('span', a.label), h('small', 'Beschreibungen für die Noten 1–6')),
+        h('div.set-body', [1, 2, 3, 4, 5, 6].map(n => field(`Note ${n} (${GRADE_WORDS[n]})`, textArea(d[n], v => { d[n] = v; }, 2))))));
+    }
+  }
 
   parts.push(h('h3', 'Allgemeine Feedback-Bausteine'));
   parts.push(h('p.muted', 'Platzhalter: {name} = Vorname, {subs} = notierte Unterkategorien.'));
@@ -199,7 +224,7 @@ function subjectSection(fach) {
   }
 
   parts.push(h('div.btnrow.left', btn(`${SUBJECT_NAMES[fach]}: alles auf Standard zurücksetzen`, async () => {
-    if (!await confirmDialog('Kategorien, Punkte, Notenschlüssel, Schwellen und Feedback-Bausteine dieses Fachs auf den Standard zurücksetzen? Einträge bleiben erhalten.', { ok: 'Zurücksetzen', danger: true })) return;
+    if (!await confirmDialog('Kategorien, Prozentwerte, Stufen, Beschreibungen, Schwellen und Feedback-Bausteine dieses Fachs auf den Standard zurücksetzen? Einträge bleiben erhalten.', { ok: 'Zurücksetzen', danger: true })) return;
     S.data.settings.subjects[fach] = fach === 'sport' ? sportConfig() : pbConfig();
     save();
     render();
@@ -208,58 +233,73 @@ function subjectSection(fach) {
 }
 
 const num = x => Number(String(x).replace(',', '.'));
-const keyNum = x => String(x).replace('.', ',');
 
-function keyEditor(cfg) {
-  const k = cfg.key;
+// Notenschlüssel und amtliche Definitionen (für beide Fächer)
+function keysSection() {
+  const st = S.data.settings;
+  const k = st.keys;
+  const pctIn = e => numInput(e.min, v => { e.min = Math.round(v * 10) / 10; }, { step: 1, min: 0, max: 100 });
   const sek1 = h('div.key-grid',
-    k.sek1.map(e => field(`Note ${e.grade} ab`, numInput(e.min, v => { e.min = Math.round(v * 100) / 100; }, { step: 0.05 }))),
-    h('div.field', h('span', 'Note 6'), h('div.key-below', `unter ${keyNum(k.sek1.find(e => e.grade === 5).min)}`)));
+    [...k.sek1].sort((a, b) => a.grade - b.grade).map(e => field(`Note ${e.grade} ab %`, pctIn(e))),
+    h('div.field', h('span', 'Note 6'), h('div.key-below', 'darunter')));
   const sek2 = h('div.key-grid.sek2',
-    k.sek2.map(e => field(`${e.pts} P. ab`, numInput(e.min, v => { e.min = Math.round(v * 100) / 100; }, { step: 0.01 }))),
-    h('div.field', h('span', '0 P.'), h('div.key-below', `unter ${keyNum(k.sek2.find(e => e.pts === 1).min)}`)));
+    [...k.sek2].sort((a, b) => b.pts - a.pts).map(e => field(`${e.pts} P. ab %`, pctIn(e))),
+    h('div.field', h('span', '0 P.'), h('div.key-below', 'darunter')));
   return [
-    h('h4', 'Sek I (Noten 1–6)'), sek1,
-    h('h4', 'Sek II (11 GK, 12 GK: 15–0 Punkte)'),
-    h('p.muted.small', 'Abgeleitet aus dem Sek-I-Schlüssel: jeder Notenbereich in drei gleich breite Stufen, Note 1 mit der Breite von Note 2, Note 6 = 0 Punkte. Einzelwerte sind änderbar.'),
-    sek2,
-    h('div.btnrow.left', btn('Sek-II-Schlüssel aus Sek I neu ableiten', async () => {
-      if (!await confirmDialog('Sek-II-Schlüssel neu aus dem Sek-I-Schlüssel ableiten? Eigene Änderungen am Sek-II-Schlüssel gehen verloren.', { ok: 'Neu ableiten' })) return;
-      k.sek2 = deriveSek2(k.sek1);
+    h('p.muted', 'Fester Schlüssel für Sport und PB, nicht relativ zur Klasse. Angegeben ist jeweils die Untergrenze („ab“) des Durchschnitts der gewerteten Stunden.'),
+    h('h4', 'Sek I (Klassen 8–10)'), sek1,
+    h('h4', 'Sek II (11 GK, 12 GK)'), sek2,
+    field('Vorschlag gilt als „vorläufig“, solange weniger als … gewertete Stunden vorliegen',
+      numInput(st.minLessons, v => { st.minLessons = Math.min(20, Math.max(1, Math.round(v))); }, { min: 1, max: 20 })),
+    h('h4', 'Amtliche Notendefinitionen'),
+    [1, 2, 3, 4, 5, 6].map(n => field(`${n} (${GRADE_WORDS[n]})`, textArea(st.official[n], v => { st.official[n] = v; }, 2))),
+    field('Sek II, 4 Punkte (schwach ausreichend)', textArea(st.official.sek2_4, v => { st.official.sek2_4 = v; }, 2)),
+    h('div.btnrow.left', btn('Schlüssel und Definitionen auf Standard zurücksetzen', async () => {
+      if (!await confirmDialog('Notenschlüssel Sek I/II und amtliche Definitionen auf den Standard zurücksetzen?', { ok: 'Zurücksetzen', danger: true })) return;
+      st.keys = defaultKeys();
+      st.official = defaultOfficial();
       save(); render();
-    }, 'ghost')),
+    }, 'ghost danger')),
   ];
 }
 
 function catEditor(fach, cfg, c) {
+  const abs = c.kind === 'base' || c.kind === 'protocol';
   const desc = c.neutral ? 'wertungsfrei'
-    : c.levels ? c.levels.map(l => (l.label === fmtPts(Number(l.pts)) ? l.label : `${l.label} ${fmtPts(Number(l.pts))}`)).join(' · ')
-      : [Number.isFinite(c.plus) && fmtPts(c.plus), Number.isFinite(c.minus) && fmtPts(c.minus)].filter(Boolean).join(' / ');
+    : c.kind === 'zero' ? 'Stunde 0 %'
+      : c.kind === 'passive' ? `Stunde wird gewertet (Start ${fmtPct(Number(cfg.start))})`
+        : c.levels ? c.levels.map(l => `${l.label} ${abs ? fmtPct(Number(l.pct)) : fmtDelta(Number(l.pct))}`).join(' · ')
+          : [Number.isFinite(c.plus) && fmtDelta(c.plus), Number.isFinite(c.minus) && fmtDelta(c.minus)].filter(Boolean).join(' / ');
   const body = [field('Bezeichnung', textInput(c.label, v => { if (v) c.label = v; }))];
-  if (!c.neutral) {
+  if (!c.neutral && !c.kind) {
     body.push(field('Abschnitt im Bewertungsmenü', (() => {
       const s = h('select', { onChange: e => { c.section = e.target.value; save(); } },
         cfg.sections.filter(x => x.id !== 'neutral').map(x => h('option', { value: x.id }, x.label)));
       s.value = c.section;
       return s;
     })()));
-    if (c.levels) {
-      body.push(h('div.points-row', c.levels.map(l => field(`Punkte „${l.label}“`, numInput(l.pts, v => { l.pts = Math.round(v * 100) / 100; }, { step: 1 })))));
-    } else {
-      // leer = diese Richtung gibt es nicht
-      const ptsInput = (val, set) => h('input', {
-        type: 'number', step: 1, inputmode: 'decimal', value: Number.isFinite(val) ? val : '', placeholder: '– nicht möglich –',
-        onChange: e => {
-          const raw = String(e.target.value).trim();
-          if (raw === '') set(undefined);
-          else if (Number.isFinite(num(raw))) set(Math.round(num(raw) * 100) / 100);
-          save();
-        },
-      });
+  }
+  if (!c.neutral && c.levels) {
+    const lab = abs ? 'Stundenwert in %' : 'Wirkung in %';
+    for (const l of c.levels) {
       body.push(h('div.points-row',
-        field('Punkte bei Plus (leer = kein Plus)', ptsInput(c.plus, v => { c.plus = v === undefined ? undefined : Math.abs(v); })),
-        field('Punkte bei Minus (leer = kein Minus)', ptsInput(c.minus, v => { c.minus = v === undefined ? undefined : -Math.abs(v); }))));
+        field(`„${l.label}“: ${lab}`, numInput(l.pct, v => { l.pct = Math.round(v * 10) / 10; }, { step: 1 })),
+        c.kind === 'base' ? field('Beschreibung', textArea(l.desc, v => { l.desc = v; }, 2)) : null));
     }
+  } else if (!c.neutral && !c.kind) {
+    // leer = diese Richtung gibt es nicht
+    const pctInput = (val, set) => h('input', {
+      type: 'number', step: 1, inputmode: 'decimal', value: Number.isFinite(val) ? val : '', placeholder: '– nicht möglich –',
+      onChange: e => {
+        const raw = String(e.target.value).trim();
+        if (raw === '') set(undefined);
+        else if (Number.isFinite(num(raw))) set(Math.round(num(raw) * 10) / 10);
+        save();
+      },
+    });
+    body.push(h('div.points-row',
+      field('Plus in % (leer = kein Plus)', pctInput(c.plus, v => { c.plus = v === undefined ? undefined : Math.abs(v); })),
+      field('Minus in % (leer = kein Minus)', pctInput(c.minus, v => { c.minus = v === undefined ? undefined : -Math.abs(v); }))));
   }
   if (c.id !== 'abwesend' && c.id !== 'befreit') {
     body.push(field('Unterkategorien (eine pro Zeile, optional)', textArea((c.subs || []).join('\n'), v => {
@@ -274,8 +314,11 @@ function catEditor(fach, cfg, c) {
       s.value = c.fb.area || 'beteiligung';
       body.push(field('Feedback-Bereich', s));
     }
-    const hasPlus = c.levels ? c.levels.some(l => l.pts > 0) : Number.isFinite(c.plus);
-    const hasMinus = c.levels ? c.levels.some(l => l.pts < 0) : Number.isFinite(c.minus);
+    const hasPlus = c.kind === 'zero' || c.kind === 'protocol' || c.kind === 'passive' ? false
+      : c.levels ? c.levels.some(l => (c.kind === 'base' ? l.pct > cfg.start : l.pct > 0)) : Number.isFinite(c.plus);
+    const hasMinus = c.kind === 'protocol' || c.kind === 'passive' ? false
+      : c.kind === 'zero' ? true
+        : c.levels ? c.levels.some(l => (c.kind === 'base' ? l.pct < cfg.start : l.pct < 0)) : Number.isFinite(c.minus);
     if (hasPlus && c.id !== 'rede') body.push(field('Feedback-Satz bei Plus', textArea(c.fb.plus, v => { c.fb.plus = v; }, 2)));
     if (hasMinus) body.push(field('Feedback-Satz bei Minus', textArea(c.fb.minus, v => { c.fb.minus = v; }, 2)));
     if (fach === 'sport' && hasMinus) body.push(field('Tipp (wenn diese Kategorie am stärksten ins Minus geht)', textArea(c.fb.tip, v => { c.fb.tip = v; }, 2)));
@@ -325,6 +368,21 @@ const pinField = (name, label) => ({ name, label, type: 'password', inputmode: '
 
 function securitySection() {
   const legacyBox = h('div');
+  preMigrationVersions().then(list => {
+    for (const n of list) {
+      legacyBox.append(
+        h('h3', `Stand vor dem Update (Datenformat ${n})`),
+        h('p.muted', 'Vor der Umstellung des Datenformats wurde automatisch eine verschlüsselte Kopie angelegt. Beim Wiederherstellen wird sie erneut migriert; die aktuellen Daten werden ersetzt.'),
+        h('div.btnrow.left', btn(`Stand vor dem Update (Format ${n}) wiederherstellen …`, async () => {
+          if (!await confirmDialog(h('div', h('p.warnbox', 'Alle Einträge seit dem Update gehen verloren. Vorher eine Sicherung erstellen!'),
+            h('p', 'Aktuelle Daten wirklich durch den Stand vor dem Update ersetzen?')), { ok: 'Ersetzen', danger: true })) return;
+          clearUndo();
+          await replaceData(await readPreMigration(n));
+          toast('Stand vor dem Update wiederhergestellt.');
+          go({ name: 'start' });
+        }, 'ghost danger')));
+    }
+  });
   hasLegacyCopy().then(has => {
     if (!has) return;
     legacyBox.append(
